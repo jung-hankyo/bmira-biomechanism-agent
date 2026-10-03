@@ -89,7 +89,8 @@ class EntityResolver:
     def _path(self):
         d = self.settings.cache_dir
         # v2: v1 files hold split LOCAL ids for LLM-normalized labels ('Treg cell' vs 'Treg')
-        return Path(d) / f"entities_v2_{self.settings.ontology_provider}.json" if d else None
+        # v3: v2 files hold salts as their own chemical ('NaB' -> sodium butyrate)
+        return Path(d) / f"entities_v3_{self.settings.ontology_provider}.json" if d else None
 
     def _load(self) -> dict:
         p = self._path()
@@ -170,7 +171,10 @@ class EntityResolver:
         if re.match(r"^[A-Za-z][A-Za-z0-9_.-]*:\S+$", name):
             return Concept(name, name, "identifier", "identifier", 1.0)
         if self.settings.ontology_provider in {"ols", "hybrid"}:
-            return self._ols(name)
+            c = self._ols(parent_chemical(name))
+            if c and parent_chemical(c.label) != c.label:      # 'NaB' -> sodium butyrate -> butyrate
+                return self._ols(parent_chemical(c.label)) or c
+            return c
         return None
 
     def canonical(self, c: Concept) -> Concept:
@@ -526,9 +530,34 @@ def entity_change(surface: str) -> str:
     return split_change(surface)[1]
 
 
+# 'sodium butyrate', 'butyric acid' and 'butyrate' are one exposure: an inert counter-ion or the
+# protonation state is not the mechanism. Pilot4 split 25 butyrate claims over four nodes.
+# ponytail: sodium/potassium salts only; for 'zinc sulfate' or 'magnesium sulfate' the metal is the agent.
+SALT = re.compile(r"^(?:sodium|potassium)\s+(\S+ate)$", re.I)
+ACID = re.compile(r"^(\S+?)(?<!nucle)ic acid$", re.I)
+GIVEN = r"treatment|supplementation|administration|provision|exposure"
+
+
+def parent_chemical(name: str) -> str:
+    """'sodium butyrate' -> 'butyrate', 'butyric acid' -> 'butyrate'; anything else unchanged."""
+    if m := SALT.match(name.strip()):
+        return m.group(1)
+    if m := ACID.match(name.strip()):
+        return m.group(1) + "ate"
+    return name
+
+
+def strip_given(surface: str) -> str:
+    """'Butyrate supplementation', 'provision of butyrate' -> the agent, not the act of giving it."""
+    s = clean(surface)
+    m = re.match(rf"^(?:{GIVEN})\s+(?:of|with)\s+(?:the\s+)?(.+)$", s, flags=re.I) \
+        or re.match(rf"^(.+?)\s+(?:{GIVEN})$", s, flags=re.I)
+    return m.group(1) if m and len(m.group(1)) >= 2 and m.group(1).lower() not in GENERIC else s
+
+
 def entity_of(surface: str) -> tuple[str, str, str]:
     """surface -> (entity, attribute, tissue)."""
-    rest, attr = split_attribute(split_change(surface)[0])
+    rest, attr = split_attribute(strip_given(split_change(surface)[0]))
     rest = clean(re.sub(rf"^(?:{MODIFIERS})\s+", "", rest, flags=re.I)) or rest
     rest, tissue = split_location(rest)
     return rest, attr, tissue

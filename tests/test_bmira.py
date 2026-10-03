@@ -764,3 +764,23 @@ def test_saved_run_replays_without_searching_or_rejudging(tmp_path):
     assert b["run"]["rounds"] == a["run"]["rounds"]
     assert [p["verdict"] for p in b["pathways"]["ranked"]] == [p["verdict"] for p in a["pathways"]["ranked"]]
     assert b["verification"]["passed"]
+
+
+# N1-N11: fixes from the pilot4 live run (butyrate -> Treg).
+def _onto(table):
+    """A stand-in for OLS: lookup key -> (id, label)."""
+    import bmira.normalize as nz
+    return lambda n: nz.Concept(*table[nz.lookup_key(n)], "chemical", "ols", 0.9) if nz.lookup_key(n) in table else None
+
+
+def test_salt_acid_and_given_forms_name_the_parent_chemical():
+    import bmira.normalize as nz
+    assert nz.entity_of("Sodium butyrate treatment")[0] == "Sodium butyrate"
+    assert nz.entity_of("Butyrate supplementation")[0] == "Butyrate"
+    assert nz.entity_of("provision of butyrate")[0] == "butyrate"
+    assert nz.parent_chemical("sodium butyrate") == "butyrate" and nz.parent_chemical("butyric acid") == "butyrate"
+    assert nz.parent_chemical("nucleic acid") == "nucleic acid"
+    assert nz.parent_chemical("magnesium sulfate") == "magnesium sulfate"     # the metal is the agent
+    r = nz.EntityResolver(Settings(ontology_provider="ols"))
+    r._ols = _onto({"nab": ("CHEBI:64103", "sodium butyrate"), "butyrate": ("CHEBI:17968", "butyrate")})
+    assert {r.resolve(x).id for x in ("NaB", "sodium butyrate", "butyric acid", "butyrate")} == {"CHEBI:17968"}
