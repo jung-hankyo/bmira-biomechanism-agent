@@ -1,0 +1,10 @@
+# B-MiRA experiment questions: one per line; '#' lines are ignored.
+# Order runs from best-studied (positive controls) to sparse or contested. See the protocol doc.
+Does butyrate produced by gut microbiota induce colonic regulatory T cells, and through which mechanisms?
+Does lactate accumulation in the tumor microenvironment suppress CD8 T cell effector function, and through which mechanisms?
+Does metformin enhance CD8 T cell antitumor immunity, and through which mechanisms?
+Does TET2 loss in myeloid cells promote atherosclerosis through inflammatory signaling, and through which mechanisms?
+Does age-related NAD+ decline in macrophages drive inflammaging, and through which mechanisms?
+Do SGLT2 inhibitors reduce heart failure hospitalization, and through which mechanisms?
+Does vitamin D supplementation reduce the risk of autoimmune disease, and through which mechanisms?
+Does GPR81 (HCAR1) signaling in CD8 T cells mediate lactate-induced suppression of their effector function?

@@ -237,3 +237,21 @@ def test_streamlit_app_offline():
     assert not at.exception and "Leading pathway" in at.chat_message[1].markdown[0].value
     at.chat_input[0].set_value("Why is the chromatin route contradicted?").run()
     assert not at.exception and "Contradicted" in at.chat_message[3].markdown[0].value
+
+
+# Telemetry: one session file, rewritten per run, with metrics and revision signals.
+def test_experiment_runner_writes_one_session_file(tmp_path):
+    import json
+    from bmira.experiments import main
+    qs = tmp_path / "q.txt"
+    qs.write_text("# comment\nfirst question\nsecond question\n")
+    out = main(["--offline", "--quiet", "--questions", str(qs), "--out", str(tmp_path / "s.json")])
+    session = json.loads(out.read_text())
+    assert len(session["runs"]) == 2 and session["session"]["mode"] == "offline"
+    run = session["runs"][0]
+    for section in ("llm", "retrieval", "papers", "extraction", "normalization", "grading",
+                    "comparison", "steps", "pathways", "verification", "signals"):
+        assert section in run
+    assert run["extraction"]["drop_reasons"]["null claim but the quote reports an effect"] == 1
+    assert run["pathways"]["ranked"][0]["verdict"] == "Supported"
+    assert all({"signal", "value", "threshold", "look_at"} <= set(x) for x in run["signals"])

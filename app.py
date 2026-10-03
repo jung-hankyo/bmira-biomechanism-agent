@@ -4,26 +4,24 @@ First message  -> a full investigation (search, extract, grade, pathway portfoli
 Later messages -> follow-up questions answered only from that run's evidence.
 '/new <question>' starts a fresh investigation.
 """
-import contextlib
-import io
 import json
 import os
-import threading
-import uuid
 
 import pandas as pd
 import streamlit as st
 
-from bmira import Runtime, Settings, __version__, build_agent
+from bmira import Runtime, Settings, __version__
 from bmira import portfolio as pf
 from bmira.chat import answer, portfolio_rows
 from bmira.offline import load_scenario, offline_runtime
+from bmira.telemetry import execute, summarize
 
 st.set_page_config(page_title="B-MiRA", page_icon="🧬", layout="wide")
 ss = st.session_state
 ss.setdefault("messages", [])     # {"role", "content", optional "rows", "report", "log"}
 ss.setdefault("run", None)        # final state of the latest investigation
 ss.setdefault("rt", None)         # runtime of that investigation (its LLM answers follow-ups)
+ss.setdefault("metrics", None)    # telemetry summary of that investigation
 
 # ── sidebar ─────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -42,7 +40,7 @@ with st.sidebar:
                                  value=os.environ.get("NCBI_API_KEY", ""))
     max_rounds = st.slider("Max search rounds", 1, 8, 5)
     if st.button("New conversation", use_container_width=True):
-        ss.messages, ss.run, ss.rt = [], None, None
+        ss.messages, ss.run, ss.rt, ss.metrics = [], None, None, None
         st.rerun()
     st.divider()
     st.caption("Verdicts: **Supported** · **Contradicted** · **Insufficient evidence**. "
@@ -61,34 +59,16 @@ def make_runtime() -> Runtime:
     return Runtime.live(settings, api_key=api_key)
 
 
-class _Log(io.TextIOBase):
-    """Collects print() output from every graph thread; the UI thread drains it."""
-
-    def __init__(self):
-        self.lines, self._lock, self._buf = [], threading.Lock(), ""
-
-    def write(self, s):
-        with self._lock:
-            self._buf += s
-            *done, self._buf = self._buf.split("\n")
-            self.lines += [d for d in done if d.strip()]
-        return len(s)
-
-
 def investigate(question: str):
     rt = make_runtime()
-    agent = build_agent(rt)
-    cfg = {"configurable": {"thread_id": f"bmira-{uuid.uuid4()}"}, "recursion_limit": 250}
-    log, shown = _Log(), 0
     with st.status("Investigating…", expanded=True) as status:
-        with contextlib.redirect_stdout(log):
-            for update in agent.stream({"question": question}, cfg, stream_mode="updates"):
-                status.update(label=f"Investigating… ({', '.join(update)})")
-                for line in log.lines[shown:]:
-                    status.write(line)
-                shown = len(log.lines)
+        def progress(nodes, lines):
+            status.update(label=f"Investigating… ({', '.join(nodes)})")
+            for line in lines:
+                status.write(line)
+        final, info = execute(question, rt, on_progress=progress, echo=False)
         status.update(label="Investigation finished", state="complete", expanded=False)
-    return agent.get_state(cfg).values, rt, log.lines
+    return final, rt, info
 
 
 def summary(state) -> str:
@@ -138,10 +118,10 @@ if prompt:
         if ss.run is None or new:
             if not question:
                 raise ValueError("Type a question after /new.")
-            final, ss.rt, log = investigate(question if live else DEMO_QUESTION)
-            ss.run = final
+            final, ss.rt, info = investigate(question if live else DEMO_QUESTION)
+            ss.run, ss.metrics = final, summarize(final, ss.rt, info)
             msg = {"role": "assistant", "content": summary(final), "rows": portfolio_rows(final),
-                   "report": final["report"], "log": log}
+                   "report": final["report"], "log": info["log"]}
         else:
             with st.spinner("Reading the run's evidence…"):
                 reply, issues = answer(ss.run, ss.rt, question, ss.messages[:-1])
@@ -153,8 +133,10 @@ if prompt:
 
 if ss.run is not None:
     with st.sidebar:
-        st.download_button("Download run state (.json)", json.dumps(
-            {k: ss.run[k] for k in ("question", "hypotheses", "links", "portfolio_history",
-                                    "warnings", "verification")},
-            default=lambda o: o.model_dump() if hasattr(o, "model_dump") else str(o), indent=1),
-            "bmira_run_state.json", use_container_width=True)
+        st.download_button("Download run summary (.json)", json.dumps(
+            ss.metrics, indent=1, ensure_ascii=False,
+            default=lambda o: o.model_dump() if hasattr(o, "model_dump") else str(o)),
+            "bmira_run_summary.json", use_container_width=True,
+            help="Metrics and revision signals for this run; same format as the batch runner.")
+        if ss.metrics["signals"]:
+            st.caption("Revision signals: " + ", ".join(x["signal"] for x in ss.metrics["signals"]))

@@ -1,6 +1,6 @@
 # B-MiRA — Biomedical Mechanism Inference Research Agent
 
-**v2.1** · LangGraph · Python 3.10+
+**v2.2** · LangGraph · Python 3.10+
 
 Ask *"Does X affect Y, and through which mechanisms?"*. B-MiRA searches PubMed, extracts claims from papers, grades the evidence, and weighs **several candidate pathways against each other** before writing a report in which every sentence is tied to a cited claim.
 
@@ -71,7 +71,7 @@ pip install -r requirements.txt
 **1. Try it offline (no keys, no network).** A synthetic scenario and a scripted model exercise the whole pipeline:
 
 ```bash
-python -m pytest -q tests          # 19 tests
+python -m pytest -q tests          # 20 tests
 streamlit run app.py               # choose "Offline demo" in the sidebar
 ```
 
@@ -93,6 +93,16 @@ export NCBI_API_KEY=...             # optional, raises PubMed rate limits
 
 The report and the run state can be downloaded as Markdown and JSON.
 
+### Running experiments
+
+```bash
+python -m bmira.experiments                        # the 8 questions in experiments/questions.txt
+python -m bmira.experiments --only 1 2 --max-rounds 3
+python -m bmira.experiments --offline              # wiring check, no keys
+```
+
+Each session writes **one** file, `runs/session_<timestamp>.json` (git-ignored), rewritten after every question. Per run it holds: LLM calls, tokens, latency and failures per task; queries and hits; screening and full-text rates; claims kept and dropped (with reasons and samples); uncredited method details; ontology resolution and synonym merges; grades and caps; claim comparisons and conflicts; step and pathway verdicts with reasons; leader per round; verification; warnings; the log tail; the report. A `signals` list flags measured values that crossed a heuristic threshold, each naming the code to inspect. The chat app offers the same summary as a download.
+
 ### Using the notebook
 
 `B-MiRA_workflow.ipynb` runs the same pipeline step by step with inspection tables (pathways per round, step evidence, claim ledger) and is the easiest way to see *why* the agent reached its conclusion.
@@ -101,6 +111,7 @@ The report and the run state can be downloaded as Markdown and JSON.
 
 ```
 app.py                    Streamlit chat interface
+experiments/questions.txt Eight experiment questions for live runs
 docs/figure1.svg          Architecture figure (also .png)
 B-MiRA_workflow.ipynb     Walk-through notebook
 bmira/
@@ -114,6 +125,8 @@ bmira/
   portfolio.py            Evidence graph, verdicts, scoring, search allocation
   graph.py                The LangGraph pipeline and report
   chat.py                 Follow-up answers grounded in a finished run
+  telemetry.py            Run metrics and revision signals
+  experiments.py          Batch runner: questions in, one session summary file out
   offline.py              Scripted model + synthetic corpus for key-free runs
   fixtures/               Synthetic test scenario (invented papers)
 tests/test_bmira.py       One test per design guarantee
@@ -148,6 +161,8 @@ All in `bmira/config.py`; the app exposes the round limit.
 **v2.0.1** adds the MIT license, citation metadata and the architecture figure.
 
 **v2.1.0** hardens the evidence pipeline: claims are checked against their quotes, method details need textual support, grades are per claim with an indirectness cap, reviews no longer count as independent, null results and context arguments face explicit rules, targeted searches are read for their step, entities are separated from how they were measured, and retrieval retries and reads full texts by section. Expect fewer Supported and fewer "no study found" verdicts than v2.0; both are corrections.
+
+**v2.2.0** adds run telemetry: token, latency and failure accounting per LLM task, a batch experiment runner that writes one session summary file, revision signals, and eight experiment questions.
 
 ## License
 

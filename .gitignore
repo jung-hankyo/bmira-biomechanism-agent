@@ -6,3 +6,4 @@ __pycache__/
 .streamlit/secrets.toml
 run_state.json
 bmira_run_state.json
+runs/

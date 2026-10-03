@@ -68,7 +68,8 @@ class SurrogateLLM:
 
     def __init__(self, scenario: dict):
         self.s = scenario
-        self.calls, self.items = Counter(), Counter()
+        self.calls, self.items, self.failures = Counter(), Counter(), Counter()
+        self.tokens_in, self.tokens_out, self.seconds = Counter(), Counter(), Counter()
         self.alias_groups = [{lookup_key(x) for x in g} for g in scenario["alias_groups"]]
 
     def structured_many(self, task, schema, system, users, role="cheap", ctxs=None):
