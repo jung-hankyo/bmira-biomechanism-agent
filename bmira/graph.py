@@ -132,7 +132,14 @@ def plan(state, rt):
             print(f"[plan][WARN] coverage round lacks intents {sorted(missing)}")
     else:
         keys = {t.key for t in targets}
-        queries = [q for q in out.queries if q.target in keys]
+        norm = lambda k: k.strip().strip("[]`'\" ")             # the model copies ids with brackets or quotes
+        by_key = {norm(k): k for k in keys}
+        queries = [q.model_copy(update={"target": by_key[norm(q.target)]}) for q in out.queries
+                   if norm(q.target) in by_key]
+        if len(queries) < len(out.queries) or not queries:       # pilot5: 3 queries for 3 targets, no sign why
+            print(f"[plan][WARN] {len(out.queries) - len(queries)} of {len(out.queries)} model queries named "
+                  f"no known target and were dropped; targets {sorted(keys)}, model targets "
+                  f"{sorted({q.target for q in out.queries})}")
         queries += [_synonym_query(t, rt) for t in targets]   # every step: one query built by code
     print(f"[plan] round {state.get('round_idx', 0) + 1}: {len(queries)} queries"
           + (f" for {len(targets)} target links" if targets else " (coverage round)"))

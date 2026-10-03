@@ -888,6 +888,32 @@ def test_quote_check_reads_the_first_use_of_the_verb():
         == "quote negates the claimed effect"
 
 
+def test_plan_matches_target_ids_leniently_and_says_when_it_drops_queries(capsys):
+    """Pilot5 ran 3 queries for 3 targets (pilot4: 12) and nothing said why."""
+    from bmira.graph import plan
+    from bmira.schemas import ParsedQuestion, QueryPlan, SearchQuery
+    rt, _ = offline_runtime()
+    key = "A|increases|B"
+    ln = pf.LinkEvidence(key=key, subject="A", relation="increases", object="B", subject_label="a", object_label="b")
+
+    class LLM:
+        def __init__(self, targets):
+            self.targets = targets
+
+        def structured(self, *a, **k):
+            return QueryPlan(queries=[SearchQuery(query=f"q{i}", intent="gap_positive", target=t)
+                                      for i, t in enumerate(self.targets)])
+    parsed = ParsedQuestion(population_model="m", exposure="a", comparator="c", outcome="b", mechanism_hypothesis="h")
+    state = {"parsed": parsed, "question": "q", "links": {key: ln}, "targets": [key]}
+    rt.llm = LLM([f"[{key}]", f" {key} ", "nonsense"])
+    out = plan(state, rt)["queries"]
+    assert [q.target for q in out[:2]] == [key, key] and len(out) == 3          # 2 matched + 1 built by code
+    assert "[plan][WARN] 1 of 3 model queries named no known target" in capsys.readouterr().out
+    rt.llm = LLM([key])
+    plan(state, rt)
+    assert "WARN" not in capsys.readouterr().out
+
+
 def test_paper_defined_abbreviations_name_the_long_form():
     """Pilot5: 'SB' became LOCAL:sb in the paper that defines 'sodium butyrate (SB)'; live OLS
     returns no exact match for SB or NaB."""
