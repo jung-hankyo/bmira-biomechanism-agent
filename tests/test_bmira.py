@@ -1096,6 +1096,9 @@ def test_verifier_false_alarms_from_pilot5():
     assert sentence_tier("Butyrate is the mediator of this effect.") == 0
     assert sentence_tier("Butyrate mediates this effect.") == 4
     assert sentence_tier("Butyrate associates with Tregs and increases FOXP3.") == 3
+    assert sentence_tier("Source-trace microbial butyrate while measuring colonic Treg induction, and test "
+                         "whether blocking FFAR2 changes it [NO_EVIDENCE].") == 0         # a proposed experiment
+    assert sentence_tier("Testing shows butyrate induces Tregs.") == 4                   # 'Testing' is no imperative
 
 
 def test_direct_routes_take_no_pathway_slot():

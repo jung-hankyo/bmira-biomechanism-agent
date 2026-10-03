@@ -178,9 +178,17 @@ NOT_ASSERTED = re.compile(r"\b(?:do|does|did|can|could)\s*not\s+(?:establish|sho
                           r"confirm|indicate|imply|identify|reveal)\b|\bneeds? to\b|\bwhether\b")
 
 
+# 'Source-trace microbial butyrate while measuring Treg induction, and test whether ...': a proposed
+# experiment, not a finding. Only at the start of the sentence.
+IMPERATIVE = re.compile(r"^\W*(?:source-trace|trace|test|measure|compare|knock\w*|block|delete|run|perform|treat|"
+                        r"repeat|assess|determine|quantify|isolate|stratify|randomi[sz]e)\b")
+
+
 def sentence_tier(sentence: str) -> int:
     """Strongest verb tier; a verb negated within three words reads as a null statement."""
     s, best = re.sub(r"\[[A-Za-z0-9_\-]+\]", " ", sentence.lower()), 0
+    if IMPERATIVE.match(s):
+        return 0
     s = re.sub(r"\*+|(?<!\w)_|_(?!\w)", "", s)          # markdown emphasis: '*induced* Tregs' is a cell name
     s = NOUN_CHANGE.sub(" ", NOUN_INDUCED.sub(r"\1 ", s))
     if m := NOT_ASSERTED.search(s):
