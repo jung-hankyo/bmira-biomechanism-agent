@@ -868,6 +868,28 @@ def test_local_cell_subtypes_inherit_the_cell_type_they_name():
     assert ln.n_studies == 2                                              # the subtype finding counts (R9)
 
 
+def test_split_exposure_and_off_portfolio_support_are_signalled():
+    """Pilot4's real failure left no signal: 25 claims on butyrate variants and Supported steps
+    on no pathway, with fragmentation reading a healthy 0.32."""
+    from bmira.telemetry import execute, signals, summarize
+    rt, sc = offline_runtime()
+    final, info = execute(sc["question"], rt, echo=False)
+    names = lambda m: {x["signal"] for x in signals(m)}
+    ok = summarize(final, rt, info)
+    assert ok["normalization"]["exposure_variants"]["claims"] == 0
+    assert "exposure split" not in names(ok) and "supported off-portfolio" not in names(ok)
+    exposure = rt.resolver.concepts[final["exposure"]].label
+    claim = next(c for c in final["claims"] if c.subject_concept == final["exposure"])
+    claim.subject_concept, claim.subject_label = "LOCAL:variant", f"sodium {exposure}"
+    split = summarize(final, rt, info)
+    assert split["normalization"]["exposure_variants"]["labels"] == {f"sodium {exposure}": 1}
+    assert "exposure split" in names(split)
+    off = summarize({**final, "hypotheses": []}, rt, info)          # no pathway uses any Supported step
+    n = ok["steps"]["verdicts"]["Supported"]
+    assert n >= 2 and len(off["steps"]["supported_off_portfolio"]) == n
+    assert "supported off-portfolio" in names(off)
+
+
 def test_associative_wording_and_emphasis_do_not_trigger_overclaim():
     """The four sentences pilot4's verifier flagged, from the report itself."""
     flagged = [

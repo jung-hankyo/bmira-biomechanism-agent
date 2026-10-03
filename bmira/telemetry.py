@@ -207,6 +207,21 @@ def summarize(final: dict, rt, run: dict) -> dict:
     by_label = {}                      # one label naming several concepts = a split node
     for c in concepts:
         by_label.setdefault(lookup_key(c.label), set()).add(res.canonical(c).id)
+    # Claims on a variant of the exposure ('sodium butyrate', 'butyrate supplementation' beside
+    # 'butyrate'): pilot4 had 25, and fragmentation (0.32) did not show it. Heuristic: a different
+    # node whose label holds every word of the exposure's; 'butyrate-producing Clostridia' also
+    # matches, so read the labels before deciding.
+    exp = res.concepts.get(final.get("exposure"))
+    exp_id = res.canonical(exp).id if exp else None
+    exp_words = set(lookup_key(exp.label).split()) if exp else set()
+    variants = Counter()
+    for c in claims:
+        for cid, label in ((c.subject_concept, c.subject_label), (c.object_concept, c.object_label)):
+            if exp_words and cid != exp_id and exp_words <= set(lookup_key(label).split()):
+                variants[label] += 1
+    on_paths = {k for h in hyps for k in h.links}
+    off_paths = [f"{ln.subject_label} -{ln.relation}-> {ln.object_label}"
+                 for k, ln in links.items() if ln.status == "supported" and k not in on_paths]
 
     zero = Counter()
     per_task = {}
@@ -286,6 +301,8 @@ def summarize(final: dict, rt, run: dict) -> dict:
             # new nodes (fragmented graph); lower = claims share nodes and can connect
             "fragmentation": _share(len(concept_ids), 2 * len(claims)),
             "duplicate_labels": sorted(k for k, ids in by_label.items() if len(ids) > 1),
+            "exposure_variants": {"exposure": exp.label if exp else None, "claims": sum(variants.values()),
+                                  "labels": dict(variants.most_common(10))},
             "entity_cache_reused": getattr(res, "disk_hits", 0),
             "tissues": _count(t for c in claims for t in c.context_tissue.split(", ") if t),
             "distinct_contexts": len({c.context_concept for c in claims if c.context_concept})},
@@ -304,7 +321,8 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "reasons": _count(re.sub(r"\d+", "N", ln.reason) for ln in links.values()),
             "not_counted": _count(r for ln in links.values() for r in ln.uncounted.values()),
             "papers_per_step": _count(str(ln.n_studies) if ln.n_studies < 3 else "3+" for ln in links.values()),
-            "searched_out": sum(ln.exhausted for ln in links.values())},
+            "searched_out": sum(ln.exhausted for ln in links.values()),
+            "supported_off_portfolio": off_paths},
         "pathways": {
             "count": len(hyps), "verdicts": _count(STATUS_LABEL[h.status] for h in hyps),
             # direct exposure -> outcome routes answer the question; these count the mechanism routes
@@ -437,6 +455,12 @@ RULES = [
      "semantic.adjudicate pair numbering; PROMPTS['pair']; the model returned fewer or mis-numbered verdicts"),
     ("one label, several concepts", lambda m: m["normalization"]["duplicate_labels"],
      lambda v: len(v) > 0, "> 0 labels", "normalize.EntityResolver._labelled / consolidate_aliases"),
+    ("exposure split", lambda m: m["normalization"]["exposure_variants"]["claims"],
+     lambda v: v > 0, "> 0 claims on a variant of the exposure node",
+     "normalization.exposure_variants.labels; normalize.parent_chemical / strip_given; alias merging"),
+    ("supported off-portfolio", lambda m: (len(m["steps"]["supported_off_portfolio"]), m["steps"]["verdicts"].get("Supported", 0)),
+     lambda v: v[1] >= 2 and v[0] / v[1] > 0.5, "> 0.5 of >= 2 Supported steps on no pathway",
+     "steps.supported_off_portfolio: evidence landing on nodes the pathways do not use (entity splits, seeding)"),
 ]
 
 
