@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "B-MiRA: Biomedical Mechanism Inference Research Agent"
+type: software
+version: 2.0.0
+date-released: 2026-10-03
+license: MIT
+repository-code: "https://github.com/jung-hankyo/bmira-biomechanism-agent"
+abstract: >-
+  A LangGraph agent that searches biomedical literature, grades extracted
+  claims, and weighs competing mechanism pathways against each other, reporting
+  each pathway as Supported, Contradicted or Insufficient evidence.
+keywords:
+  - biomedical literature
+  - mechanism inference
+  - LangGraph
+  - evidence grading
+authors:
+  - family-names: Jung
+    given-names: Hankyo

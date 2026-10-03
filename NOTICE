@@ -1,0 +1,24 @@
+B-MiRA: Biomedical Mechanism Inference Research Agent
+Copyright (c) 2026 Hankyo Jung
+Licensed under the MIT License (see LICENSE).
+
+This repository does not bundle third-party code. It depends on the packages
+below, which you install separately and which remain under their own licenses.
+Licenses are listed as published by each project; check upstream before
+redistributing.
+
+  langgraph, langchain-core, langchain-openai   MIT
+  pydantic                                      MIT
+  pytest                                        MIT
+  requests                                      Apache-2.0
+  streamlit                                     Apache-2.0
+  sentence-transformers                         Apache-2.0
+  numpy, pandas                                 BSD-3-Clause
+
+Data and services:
+  - Literature is retrieved at run time from PubMed (NCBI E-utilities) and
+    Europe PMC; ontology terms from the EBI Ontology Lookup Service. Their
+    terms of use apply to retrieved content. Retrieved text is not stored in
+    or distributed with this repository.
+  - bmira/fixtures/lactate_cd8.json contains INVENTED papers for software
+    testing only. They are not real literature and must not be cited.

@@ -136,4 +136,8 @@ All in `bmira/config.py`; the app exposes the round limit.
 
 ## License
 
-No license has been chosen yet, so all rights are reserved by default. Open an issue if you would like to reuse the code.
+MIT. See [LICENSE](LICENSE). Third-party dependencies and data sources are listed in [NOTICE](NOTICE). The papers in `bmira/fixtures/` are invented test data, not real literature.
+
+## Citing
+
+If B-MiRA helps your work, please cite it. GitHub's "Cite this repository" button reads [CITATION.cff](CITATION.cff).
