@@ -147,7 +147,7 @@ VERB_TIER = {
         r"\bsuppress\w*", r"\battenuat\w*", r"\baugment\w*", r"\bmodulat\w*",
         r"\bincreas\w*", r"\bdecreas\w*", r"\belevat\w*", r"\blower\w*", r"\bdeplet\w*"],
     4: [r"\bcause[sd]?\b", r"\bdrive[sn]?\b", r"\bdrove\b", r"\binduc\w*", r"\btrigger\w*",
-        r"\babolish\w*", r"\bmediat\w*", r"\brequired for\b", r"\bnecessary for\b",
+        r"\babolish\w*", r"\bmediat(?:e[sd]?|ing|ion)\b", r"\brequired for\b", r"\bnecessary for\b",   # not 'mediator'
         r"\bsufficient\b", r"\blead(?:s|ing)? to\b"],
 }
 NEGATION = re.compile(r"\b(?:not|no|never|without|fail(?:s|ed)? to|did not|does not|do not)\b")
@@ -163,8 +163,16 @@ NOUN_INDUCED = re.compile(
 # 'associated with increased X': the change word describes the association, it asserts no cause.
 # Only directly after the lead-in (up to two plain words), never across 'and', a comma or a clause.
 ASSOCIATIVE_LEAD = re.compile(
-    r"\b(?:associated with|association with|linked to|correlated with|correlation with|consistent with)\s+"
+    r"\b(?:associat(?:es?|ed|ing)\s+(?:[\w-]+\s+){0,3}?with|association with|linked to|correlated with|"
+    r"correlation with|consistent with)\s+"
     r"(?:(?!and\b|or\b|but\b|which\b|that\b|while\b|whereas\b)[\w-]+\s+){0,2}$")
+# 'X induces Y is not identified here': the claim is mentioned, then denied. Only when no comma or
+# semicolon sits between the verb and the denial ('X induces Y, which is not established in humans' is asserted).
+DENIED = re.compile(r"\b(?:is|are|was|were|has been|have been|remains?)\s+not\s+(?:yet\s+)?(?:been\s+)?"
+                    r"(?:identified|established|shown|demonstrated|observed|found)\b")
+# 'the Treg increase itself', 'a decrease': the change word is a noun here
+# ponytail: also masks 'the data increase Tregs' (a plural verb after one word); rare, and a verb check needs a parser
+NOUN_CHANGE = re.compile(r"\b(?:the|an?|this|that|its|their|any)\s+(?:[\w-]+\s+)?(?:increase|decrease|reduction|elevation)\b")
 # what follows these is mentioned, not asserted: 'do not establish that X induces Y', 'would need to test'
 NOT_ASSERTED = re.compile(r"\b(?:do|does|did|can|could)\s*not\s+(?:establish|show|demonstrate|prove|support|"
                           r"confirm|indicate|imply|identify|reveal)\b|\bneeds? to\b|\bwhether\b")
@@ -174,14 +182,16 @@ def sentence_tier(sentence: str) -> int:
     """Strongest verb tier; a verb negated within three words reads as a null statement."""
     s, best = re.sub(r"\[[A-Za-z0-9_\-]+\]", " ", sentence.lower()), 0
     s = re.sub(r"\*+|(?<!\w)_|_(?!\w)", "", s)          # markdown emphasis: '*induced* Tregs' is a cell name
-    s = NOUN_INDUCED.sub(r"\1 ", s)
+    s = NOUN_CHANGE.sub(" ", NOUN_INDUCED.sub(r"\1 ", s))
     if m := NOT_ASSERTED.search(s):
         s = s[:m.start()]
+    denied = DENIED.search(s)
     for tier, pats in VERB_TIER.items():
         for p in pats:
             for m in re.finditer(p, s):
                 before = " ".join(s[:m.start()].split()[-3:])
-                associative = NEGATION.search(before) or ASSOCIATIVE_LEAD.search(s[:m.start()])
+                associative = NEGATION.search(before) or ASSOCIATIVE_LEAD.search(s[:m.start()]) or (
+                    denied and m.end() < denied.start() and not re.search(r"[,;:]", s[m.end():denied.start()]))
                 best = max(best, 1 if associative else tier)
     return best
 

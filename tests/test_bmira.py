@@ -1060,6 +1060,26 @@ def test_associative_wording_and_emphasis_do_not_trigger_overclaim():
     assert sentence_tier("Butyrate is associated with more induced regulatory T cells.") == 1
 
 
+def test_verifier_false_alarms_from_pilot5():
+    """Pilot5's overclaim samples. The first four are not causal claims; the fifth is."""
+    ok = [
+        "A source-traced experiment establishing that **microbiota-produced** butyrate induces **colonic** Tregs "
+        "is not identified here [NO_EVIDENCE].",
+        "The proposed FOXP3, fatty-acid-oxidation, receptor, and histone-acetylation mechanisms remain less "
+        "established than the Treg increase itself [C34006836_0][C34035164_1].",
+        "Link [L2] also connects butyrate with Treg readouts; this broader route does not specify a distinct "
+        "mediator [C40983096_0][C30446387_3].",
+        "Link [L15] associates butyrate with reduced histone-deacetylase readouts [C35148177_4][C38944008_1]."]
+    assert all(sentence_tier(x) <= 1 for x in ok), [sentence_tier(x) for x in ok]
+    bad = ("The FOXP3 findings differ by T-cell context: butyrate increases FOXP3 in naive CD4+ cells in one "
+           "animal study [C34006836_0].")
+    assert sentence_tier(bad) == 3                                   # a weak claim still may not say 'increases'
+    assert sentence_tier("Butyrate induces Tregs, which is not established in humans.") == 4   # asserted, then qualified
+    assert sentence_tier("Butyrate is the mediator of this effect.") == 0
+    assert sentence_tier("Butyrate mediates this effect.") == 4
+    assert sentence_tier("Butyrate associates with Tregs and increases FOXP3.") == 3
+
+
 def test_direct_routes_take_no_pathway_slot():
     """Pilot4: H5 and its subtype H6 took two of six slots, so expansion never had room."""
     s = Settings(max_hypotheses=2)
