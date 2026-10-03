@@ -832,3 +832,20 @@ def test_modifications_and_inhibition_name_the_bare_entity_in_claims_and_pathway
                                                        target="Histone H3 acetylation")])
     keys, _ = pf.proposal_keys(pw, r)                                  # the pathway names the same node
     assert keys == [pf.link_key(r.resolve("HDAC").id, "decreases", c.object_concept)]
+
+
+def test_local_cell_subtypes_inherit_the_cell_type_they_name():
+    import bmira.normalize as nz
+    treg = nz.Concept("CL:0000815", "regulatory T cell", "cell_type", "ols", 0.9, ("CL:0000084",))
+    dc = nz.Concept("CL:0000451", "dendritic cell", "cell_type", "ols", 0.9)
+    r = nz.EntityResolver(Settings(ontology_provider="hybrid"))
+    r._ols = lambda n: {"regulatory t cell": treg, "dendritic cell": dc}.get(nz.lookup_key(n))
+    sub = r._labelled("FOXP3-positive regulatory T cell", "cell_type", 0.9)
+    assert sub.id.startswith("LOCAL:") and sub.parents == ("CL:0000815",) and "CL:0000084" in sub.ancestors
+    assert r._labelled("Slc5a8-null dendritic cell", "cell_type", 0.9).parents == ("CL:0000451",)
+    assert r._labelled("regulatory T cell balance", "phenotype", 0.9).ancestors == ()   # not a cell type
+    link = pf.link_key("CHEBI:17968", "increases", "CL:0000815")
+    claims = [_claim("A", "p1", "increases", subj="CHEBI:17968", obj=sub.id),
+              _claim("B", "p2", "increases", subj="CHEBI:17968", obj="CL:0000815")]
+    ln = pf.build_links(claims, {}, {}, {}, Settings(), extra={link}, ancestors={sub.id: sub.ancestors})[link]
+    assert ln.n_studies == 2                                              # the subtype finding counts (R9)

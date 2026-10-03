@@ -90,7 +90,8 @@ class EntityResolver:
         d = self.settings.cache_dir
         # v2: v1 files hold split LOCAL ids for LLM-normalized labels ('Treg cell' vs 'Treg')
         # v3: v2 files hold salts as their own chemical ('NaB' -> sodium butyrate) and NCIT
-        #     measurement terms ('forkhead box p3' -> 'Forkhead Box Protein P3 Measurement')
+        #     measurement terms ('forkhead box p3' -> 'Forkhead Box Protein P3 Measurement'),
+        #     and LOCAL cell types without the cell type they name
         return Path(d) / f"entities_v3_{self.settings.ontology_provider}.json" if d else None
 
     def _load(self) -> dict:
@@ -206,7 +207,19 @@ class EntityResolver:
             self._remember(key, known)
             return known
         base = local_concept(name)
-        return Concept(base.id, base.label, category or "unknown", "llm", float(confidence))
+        parents = ancestors = ()
+        if category == "cell_type":   # 'FOXP3-positive regulatory T cell' is a regulatory T cell (R9 rolls it up)
+            # ponytail: one ontology lookup per uncached tail; fine for a few dozen LOCAL cell types per run
+            words = name.split()
+            for i in range(1, len(words)):
+                tail = " ".join(words[i:])
+                if tail.lower() in GENERIC:
+                    break
+                p = self.cache.get(lookup_key(tail)) or self._disk.get(lookup_key(tail)) or self._known(tail)
+                if p and p.category == "cell_type" and not p.id.startswith("LOCAL:"):
+                    parents, ancestors = (p.id,), (p.id, *p.ancestors)
+                    break
+        return Concept(base.id, base.label, category or "unknown", "llm", float(confidence), ancestors, parents)
 
     def _resolve(self, name: str) -> Concept:
         if not name:
