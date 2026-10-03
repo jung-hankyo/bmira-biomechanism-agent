@@ -164,6 +164,8 @@ All in `bmira/config.py`; the app exposes the round limit.
 
 **v2.2.0** adds run telemetry: token, latency and failure accounting per LLM task, a batch experiment runner that writes one session summary file, revision signals, and eight experiment questions.
 
+**v2.2.1** registers B-MiRA's data types with LangGraph's checkpoint serializer, so runs keep working when newer LangGraph releases block unregistered types. Use v2.2.1 or later for live experiments.
+
 ## License
 
 MIT. See [LICENSE](LICENSE). Dependencies keep their own licenses. Literature retrieved from PubMed, Europe PMC and the EBI Ontology Lookup Service is subject to those services' terms and is not stored in this repository. The papers in `bmira/fixtures/` are invented test data, not real literature.

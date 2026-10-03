@@ -12,6 +12,7 @@ from functools import partial
 from typing import Annotated, TypedDict
 
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
@@ -633,7 +634,12 @@ def build_agent(rt: Runtime, checkpointer=None):
                             ["plan", "synthesize"])
     g.add_edge("synthesize", "verify")
     g.add_edge("verify", END)
-    return g.compile(checkpointer=checkpointer or InMemorySaver())
+    # Checkpoints hold B-MiRA's pydantic models; newer LangGraph releases refuse to restore
+    # unregistered types, so they are allowed explicitly.
+    allowed = [("bmira.schemas", n) for n in ("ParsedQuestion", "SearchQuery", "Paper", "Claim",
+                                               "PairAdjudication", "Conflict", "LinkEvidence", "Hypothesis")]
+    saver = checkpointer or InMemorySaver(serde=JsonPlusSerializer(allowed_msgpack_modules=allowed))
+    return g.compile(checkpointer=saver)
 
 
 def run(question: str, rt: Runtime, thread_id: str | None = None):
