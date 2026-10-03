@@ -888,6 +888,31 @@ def test_quote_check_reads_the_first_use_of_the_verb():
         == "quote negates the claimed effect"
 
 
+def test_one_direct_route_per_outcome_and_a_slot_left_for_expansion():
+    """Pilot5 (after N8) had 13 pathways: seven direct routes, four to Treg differing only in relation;
+    and the last slots went to routes repeating seeds, so expansion never ran."""
+    from bmira.graph import portfolio
+    from bmira.schemas import ParsedQuestion
+    rt, _ = offline_runtime()
+    rt.settings.max_hypotheses = 3
+    parsed = ParsedQuestion(population_model="m", exposure="a", comparator="c", outcome="b",
+                            mechanism_hypothesis="h", expected_direction="up")
+    claims = [_claim("c1", "p1", "increases"), _claim("c2", "p2", "increases"),
+              _claim("c3", "p3", "modulates", grade="weak"), _claim("c4", "p4", "associated_with", grade="weak"),
+              _claim("m1", "p5", "increases", subj="LOCAL:a", obj="LOCAL:m1"),
+              _claim("m2", "p5", "increases", subj="LOCAL:m1", obj="LOCAL:b"),
+              _claim("n1", "p6", "increases", subj="LOCAL:a", obj="LOCAL:m2"),
+              _claim("n2", "p6", "increases", subj="LOCAL:m2", obj="LOCAL:b"),
+              _claim("k1", "p7", "increases", subj="LOCAL:a", obj="LOCAL:m3"),
+              _claim("k2", "p7", "increases", subj="LOCAL:m3", obj="LOCAL:b")]
+    state = {"claims": claims, "parsed": parsed, "exposure": "LOCAL:a", "outcome": "LOCAL:b",
+             "outcome_ids": ["LOCAL:b"], "seed_status": "OK", "round_idx": 0, "hypotheses": [], "papers": []}
+    out = portfolio(state, rt)["hypotheses"]
+    direct = [h for h in out if pf.is_direct(h)]
+    assert len(direct) == 1 and "increases" in direct[0].links[0]          # the strongest, not four relations
+    assert sum(not pf.is_direct(h) for h in out) == rt.settings.max_hypotheses - 1   # one slot left for expansion
+
+
 def test_conflict_verdicts_are_matched_by_number_not_echoed_keys():
     """Pilot5 asked 11 candidates and kept 1: the model had to echo 'SEM::C22724664_0'."""
     from bmira.schemas import Cluster, Conflict, ConflictBatch

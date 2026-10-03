@@ -498,15 +498,22 @@ def portfolio(state, rt):
     extra = {k for h in hyps for k in h.links}
     links = pf.build_links(claims, prior, rt.pair_cache, labels, s, extra, discounted, ancestors)
     slots = lambda: sum(not pf.is_direct(h) for h in hyps)       # direct routes take none (N8)
-    for path in pf.ledger_paths(links, exposure, outcomes, s.max_path_len):
-        direct = len(path) == 1
-        if direct and links[path[0]].object not in named:        # a subtype's direct route repeats the broader one
-            continue
-        if not direct and slots() >= s.max_hypotheses:           # no slot: adding then trimming would churn ids
+    direct_to = {pf.split_key(h.links[0])[2] for h in hyps if pf.is_direct(h)}
+    for path in pf.ledger_paths(links, exposure, outcomes, s.max_path_len):    # strongest first
+        if len(path) == 1:
+            end = links[path[0]].object
+            # one direct route per named outcome or readout, the strongest: pilot5 had seven, four to Treg
+            # differing only in relation, and a subtype's route repeats the broader one
+            if end not in named or end in direct_to:
+                continue
+            direct_to.add(end)
+        elif slots() >= s.max_hypotheses - 1:     # the last slot stays free for expansion; no slot, no churn
             continue
         via = [links[k].object_label for k in path[:-1]]
+        # multi-step routes that share half their intermediates with a seed repeat it: pilot5's 'via FFAR2'
         _add(hyps, path, "ledger_path", "Literature-graph route" + (f" via {', '.join(via)}" if via
-             else f": direct to {links[path[-1]].object_label}"), "found by graph search over supported steps", False)
+             else f": direct to {links[path[-1]].object_label}"), "found by graph search over supported steps",
+             len(path) > 1)
     novel = pf.novel_intermediates(links, hyps, exposure, outcomes)
     if novel and slots() < s.max_hypotheses:              # gated expansion, at most one per round
         try:
