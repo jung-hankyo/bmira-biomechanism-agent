@@ -868,6 +868,24 @@ def test_local_cell_subtypes_inherit_the_cell_type_they_name():
     assert ln.n_studies == 2                                              # the subtype finding counts (R9)
 
 
+def test_associative_wording_and_emphasis_do_not_trigger_overclaim():
+    """The four sentences pilot4's verifier flagged, from the report itself."""
+    flagged = [
+        "Evidence for specifically *induced* Tregs is weaker, and none of the proposed molecular routes "
+        "is established end to end [C31521614_0][NO_EVIDENCE].",
+        "[L2] Butyrate is associated with increased induced Tregs in animal studies, but this link has "
+        "only weak evidence [C31521614_0][C32010146_0][C34035164_8].",
+        "[L3] Butyrate is associated with reduced histone deacetylase in human Tregs [C35148177_4].",
+        "[L10] HCAR2 is associated with anti-inflammatory properties in macrophages, while [L12] macrophages "
+        "are associated with increased Tregs; both links have weak evidence [C24412617_1][C24412617_2]."]
+    assert [sentence_tier(x) <= 1 for x in flagged] == [True] * 4          # at most associative: weak evidence allows it
+    # the lead-in excuses only the change word right behind it, never a second clause or verb
+    assert sentence_tier("Butyrate is associated with Tregs and induces Treg differentiation.") == 4
+    assert sentence_tier("Butyrate is associated with Tregs, which promotes colitis recovery.") == 3
+    assert sentence_tier("Butyrate induced regulatory T cells in mice.") == 4          # a verb here, not a name
+    assert sentence_tier("Butyrate is associated with more induced regulatory T cells.") == 1
+
+
 def test_direct_routes_take_no_pathway_slot():
     """Pilot4: H5 and its subtype H6 took two of six slots, so expansion never had room."""
     s = Settings(max_hypotheses=2)

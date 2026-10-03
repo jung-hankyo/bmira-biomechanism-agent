@@ -157,8 +157,14 @@ STRUCTURE_TAG = re.compile(r"^(?:[HL]\d+|NO_EVIDENCE)$")
 
 # 'more induced regulatory T cells': 'induced' names a cell type here, it is not a causal verb
 NOUN_INDUCED = re.compile(
-    r"\b(more|fewer|of|on|the|and|or|for|with|than|in|to)\s+(?:induced|inducible)\s+(?=(?:and other\s+)?"
+    r"\b(more|fewer|of|on|the|and|or|for|with|than|in|to|specifically|particularly|especially|only)\s+"
+    r"(?:induced|inducible)\s+(?=(?:and other\s+)?"
     r"(?:(?:regulatory|t[- ]regulatory|helper|effector|memory)\s+)*(?:t[- ]?)?(?:cells?|tregs?|itregs?)\b)")
+# 'associated with increased X': the change word describes the association, it asserts no cause.
+# Only directly after the lead-in (up to two plain words), never across 'and', a comma or a clause.
+ASSOCIATIVE_LEAD = re.compile(
+    r"\b(?:associated with|association with|linked to|correlated with|correlation with|consistent with)\s+"
+    r"(?:(?!and\b|or\b|but\b|which\b|that\b|while\b|whereas\b)[\w-]+\s+){0,2}$")
 # what follows these is mentioned, not asserted: 'do not establish that X induces Y', 'would need to test'
 NOT_ASSERTED = re.compile(r"\b(?:do|does|did|can|could)\s*not\s+(?:establish|show|demonstrate|prove|support|"
                           r"confirm|indicate|imply|identify|reveal)\b|\bneeds? to\b|\bwhether\b")
@@ -167,6 +173,7 @@ NOT_ASSERTED = re.compile(r"\b(?:do|does|did|can|could)\s*not\s+(?:establish|sho
 def sentence_tier(sentence: str) -> int:
     """Strongest verb tier; a verb negated within three words reads as a null statement."""
     s, best = re.sub(r"\[[A-Za-z0-9_\-]+\]", " ", sentence.lower()), 0
+    s = re.sub(r"\*+|(?<!\w)_|_(?!\w)", "", s)          # markdown emphasis: '*induced* Tregs' is a cell name
     s = NOUN_INDUCED.sub(r"\1 ", s)
     if m := NOT_ASSERTED.search(s):
         s = s[:m.start()]
@@ -174,7 +181,8 @@ def sentence_tier(sentence: str) -> int:
         for p in pats:
             for m in re.finditer(p, s):
                 before = " ".join(s[:m.start()].split()[-3:])
-                best = max(best, 1 if NEGATION.search(before) else tier)
+                associative = NEGATION.search(before) or ASSOCIATIVE_LEAD.search(s[:m.start()])
+                best = max(best, 1 if associative else tier)
     return best
 
 
