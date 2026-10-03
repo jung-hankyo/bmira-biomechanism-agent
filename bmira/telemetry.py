@@ -75,7 +75,7 @@ def _share(a, b) -> float | None:
 
 def git_commit() -> str:
     try:
-        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, encoding="utf-8",
                               cwd=Path(__file__).parent, timeout=5).stdout.strip() or "unknown"
     except Exception:
         return "unknown"

@@ -38,3 +38,6 @@ class Settings:
     ncbi_email: str = ""
     # human review of the seeded portfolio (needs a checkpointer)
     interactive: bool = False
+    # Sampling temperature. None = the model's default, which every model accepts; some
+    # reasoning models reject any other value. Set a number only if your model allows it.
+    temperature: float | None = None

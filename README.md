@@ -145,6 +145,7 @@ All in `bmira/config.py`; the app exposes the round limit.
 | `targets_per_round` / `exploration_slots` | 3 / 1 | Steps searched per round / slots reserved for non-leading pathways |
 | `max_extract_per_round` | 10 | Papers read per round; papers found for a step are read first, the rest wait |
 | `max_claims_per_paper` | 8 | Claims taken from one paper (null and opposing findings are prioritized) |
+| `temperature` | `None` | Sampling temperature; `None` uses each model's default (some reasoning models accept nothing else) |
 
 ## Limitations
 
@@ -165,6 +166,8 @@ All in `bmira/config.py`; the app exposes the round limit.
 **v2.2.0** adds run telemetry: token, latency and failure accounting per LLM task, a batch experiment runner that writes one session summary file, revision signals, and eight experiment questions.
 
 **v2.2.1** registers B-MiRA's data types with LangGraph's checkpoint serializer, so runs keep working when newer LangGraph releases block unregistered types. Use v2.2.1 or later for live experiments.
+
+**v2.2.2** stops sending a fixed temperature, which some reasoning models reject (`Settings.temperature`, default `None` = the model's own default), and makes file encodings explicit so tests pass on Windows.
 
 ## License
 

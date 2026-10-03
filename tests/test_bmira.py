@@ -244,9 +244,9 @@ def test_experiment_runner_writes_one_session_file(tmp_path):
     import json
     from bmira.experiments import main
     qs = tmp_path / "q.txt"
-    qs.write_text("# comment\nfirst question\nsecond question\n")
+    qs.write_text("# comment\nfirst question\nsecond question\n", encoding="utf-8")
     out = main(["--offline", "--quiet", "--questions", str(qs), "--out", str(tmp_path / "s.json")])
-    session = json.loads(out.read_text())
+    session = json.loads(out.read_text(encoding="utf-8"))   # the file is UTF-8; Windows defaults differ
     assert len(session["runs"]) == 2 and session["session"]["mode"] == "offline"
     run = session["runs"][0]
     for section in ("llm", "retrieval", "papers", "extraction", "normalization", "grading",
@@ -255,3 +255,18 @@ def test_experiment_runner_writes_one_session_file(tmp_path):
     assert run["extraction"]["drop_reasons"]["null claim but the quote reports an effect"] == 1
     assert run["pathways"]["ranked"][0]["verdict"] == "Supported"
     assert all({"signal", "value", "threshold", "look_at"} <= set(x) for x in run["signals"])
+
+
+def test_temperature_is_not_sent_by_default(monkeypatch):
+    """Some reasoning models reject any temperature but their default."""
+    import sys
+    import types
+    from bmira.llm import LangChainLLM
+    seen = []
+    fake = types.ModuleType("langchain_openai")
+    fake.ChatOpenAI = lambda **kw: seen.append(kw) or object()
+    monkeypatch.setitem(sys.modules, "langchain_openai", fake)
+    LangChainLLM(Settings(), api_key="k")._model("reasoning")
+    assert "temperature" not in seen[-1]
+    LangChainLLM(Settings(temperature=0.0), api_key="k")._model("cheap")
+    assert seen[-1]["temperature"] == 0.0

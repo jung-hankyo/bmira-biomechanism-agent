@@ -120,14 +120,15 @@ class LangChainLLM:
         self.calls, self.items, self.failures = Counter(), Counter(), Counter()
         self.tokens_in, self.tokens_out, self.seconds = Counter(), Counter(), Counter()
 
-    @lru_cache(maxsize=8)
-    def _model(self, role: str, temperature: float):
+    @lru_cache(maxsize=4)
+    def _model(self, role: str):
         name = self.settings.models[self.settings.provider][role]
+        extra = {} if self.settings.temperature is None else {"temperature": self.settings.temperature}
         if self.settings.provider == "openai":
             from langchain_openai import ChatOpenAI
-            return ChatOpenAI(model=name, temperature=temperature, api_key=self.api_key)
+            return ChatOpenAI(model=name, api_key=self.api_key, **extra)
         from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(model=name, temperature=temperature, api_key=self.api_key)
+        return ChatAnthropic(model=name, api_key=self.api_key, **extra)
 
     def _run(self, task, n_items, fn):
         self.calls[task] += 1
@@ -154,18 +155,18 @@ class LangChainLLM:
         return res["parsed"]
 
     def structured(self, task, schema, system, user, role="reasoning", ctx=None, n_items=1):
-        model = self._model(role, 0.0).with_structured_output(schema, include_raw=True)
+        model = self._model(role).with_structured_output(schema, include_raw=True)
         res = self._run(task, n_items, lambda: model.invoke([("system", system), ("human", user)]))
         return self._parsed(task, res)
 
     def structured_many(self, task, schema, system, users, role="cheap", ctxs=None):
-        model = self._model(role, 0.0).with_structured_output(schema, include_raw=True)
+        model = self._model(role).with_structured_output(schema, include_raw=True)
         res = self._run(task, len(users), lambda: model.batch(
             [[("system", system), ("human", u)] for u in users], config={"max_concurrency": 8}))
         return [self._parsed(task, r) for r in res]
 
     def text(self, task, system, user, role="reasoning", ctx=None):
-        msg = self._run(task, 1, lambda: self._model(role, 0.2).invoke([("system", system), ("human", user)]))
+        msg = self._run(task, 1, lambda: self._model(role).invoke([("system", system), ("human", user)]))
         self._usage(task, msg)
         return msg.content if isinstance(msg.content, str) else "".join(
             b.get("text", "") for b in msg.content if isinstance(b, dict))

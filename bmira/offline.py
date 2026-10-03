@@ -205,7 +205,7 @@ class SurrogateLLM:
 
 
 def load_scenario(name="lactate_cd8"):
-    return json.loads((FIXTURES / f"{name}.json").read_text())
+    return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
 
 
 def offline_runtime(name="lactate_cd8", **overrides):
