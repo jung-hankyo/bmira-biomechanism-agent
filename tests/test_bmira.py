@@ -1060,6 +1060,24 @@ def test_associative_wording_and_emphasis_do_not_trigger_overclaim():
     assert sentence_tier("Butyrate is associated with more induced regulatory T cells.") == 1
 
 
+def test_identical_labels_merge_without_asking_the_model():
+    """'t helper 17 cell' named two concepts in pilots 4 and 5: CL (cell_type) and NCIT (other)."""
+    import bmira.normalize as nz
+    cl = nz.Concept("CL:0000899", "T-helper 17 cell", "cell_type", "ols", 0.9)
+    nc = nz.Concept("NCIT:C113815", "T Helper 17 Cell", "other", "ols", 0.9)
+    gene = nz.Concept("PR:1", "T helper 17 cell", "gene_or_protein", "ols", 0.9)       # a clash is not merged
+    r = nz.EntityResolver(Settings(ontology_provider="off"))
+    for c in (cl, nc, gene):
+        r.concepts[c.id] = c
+
+    class NoLLM:
+        def structured(self, *a, **k):
+            raise AssertionError("the model should not be asked")
+    claims = [_claim(f"c{i}", "p", "increases", subj=c.id, obj=c.id) for i, c in enumerate((cl, nc))]
+    assert nz.consolidate_aliases(claims, r, NoLLM(), {}) == 1
+    assert r.canonical(nc).id == r.canonical(cl).id == "CL:0000899"
+
+
 def test_verifier_false_alarms_from_pilot5():
     """Pilot5's overclaim samples. The first four are not causal claims; the fifth is."""
     ok = [

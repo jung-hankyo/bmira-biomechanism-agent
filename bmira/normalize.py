@@ -344,6 +344,10 @@ def consolidate_aliases(claims, resolver: EntityResolver, llm, verdicts: dict, b
             a, b = concepts[ids[x]], concepts[ids[y]]
             pair = frozenset((a.id, b.id))
             compatible = a.category == b.category or "unknown" in (a.category, b.category)
+            if pair not in verdicts and lookup_key(a.label) == lookup_key(b.label) and (
+                    a.category == b.category or {a.category, b.category} & {"unknown", "other"}):
+                verdicts[pair] = True       # one name, no judgement needed: NCIT 'T Helper 17 Cell' ('other') and
+                continue                    # CL 'T-helper 17 cell' ('cell_type') were never asked (pilots 4 and 5)
             if pair not in verdicts and compatible and _maybe_alias(a.label, b.label):
                 todo.append((a, b))
     for s in range(0, min(len(todo), cap), batch):
