@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 836" width="960" height="836" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" role="img" aria-label="B-MiRA architecture: retrieve, build the evidence graph, weigh competing pathways, repeat until the stop rule fires, then write a verified report">
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#333333"/></marker></defs>
+<rect width="960" height="836" fill="#FFFFFF"/>
+<text x="24" y="24" font-size="15" font-weight="bold" fill="#111111" text-anchor="start">B-MiRA v2.0</text>
+<text x="118" y="24" font-size="12" font-weight="normal" fill="#555555" text-anchor="start">one investigation, repeated until the stop rule fires</text>
+<rect x="24" y="60" width="876" height="116" rx="8" fill="#FAFAFA" stroke="#BDBDBD" stroke-width="1"/>
+<text x="46" y="84" font-size="17" font-weight="bold" fill="#111111" text-anchor="start">a</text>
+<text x="64" y="84" font-size="14" font-weight="bold" fill="#111111" text-anchor="start">Retrieve</text>
+<text x="884" y="83" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="end" font-style="italic">round 1 searches broadly; later rounds target open steps</text>
+<rect x="66" y="100" width="168" height="56" rx="28.0" fill="#FFFFFF" stroke="#111111" stroke-width="1.8"/>
+<text x="150.0" y="126.5" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Research question</text>
+<text x="150.0" y="140.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">exposure → outcome</text>
+<polygon points="288,100 428,100 442,128.0 428,156 288,156 274,128.0" fill="#E6EDF8" stroke="#2F4B7C" stroke-width="1.4"/>
+<text x="358.0" y="126.5" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Parse &amp; plan</text>
+<text x="358.0" y="140.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">PECO and search queries</text>
+<rect x="482" y="100" width="168" height="56" rx="3" fill="#F1F1F1" stroke="#444444" stroke-width="1.2"/>
+<text x="566.0" y="126.5" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Search</text>
+<text x="566.0" y="140.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">PubMed · Europe PMC</text>
+<polygon points="704,100 844,100 858,128.0 844,156 704,156 690,128.0" fill="#E6EDF8" stroke="#2F4B7C" stroke-width="1.4"/>
+<text x="774.0" y="126.5" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Screen papers</text>
+<text x="774.0" y="140.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">relevance, study type</text>
+<path d="M234,128 H274" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<path d="M442,128 H482" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<path d="M650,128 H690" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<rect x="24" y="196" width="876" height="176" rx="8" fill="#FAFAFA" stroke="#BDBDBD" stroke-width="1"/>
+<text x="46" y="220" font-size="17" font-weight="bold" fill="#111111" text-anchor="start">b</text>
+<text x="64" y="220" font-size="14" font-weight="bold" fill="#111111" text-anchor="start">Build the evidence graph</text>
+<text x="884" y="219" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="end" font-style="italic">every round; claims are only added, never rewritten</text>
+<polygon points="720,238 828,238 842,274.0 828,310 720,310 706,274.0" fill="#E6EDF8" stroke="#2F4B7C" stroke-width="1.4"/>
+<text x="774.0" y="265.8" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Extract claims</text>
+<text x="774.0" y="279.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">quote-checked</text>
+<text x="774.0" y="293.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">against the source</text>
+<rect x="542" y="238" width="136" height="72" rx="3" fill="#F1F1F1" stroke="#444444" stroke-width="1.2"/>
+<text x="610.0" y="265.8" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Normalize</text>
+<text x="610.0" y="279.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">ontology concepts,</text>
+<text x="610.0" y="293.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">relations, synonyms</text>
+<rect x="378" y="238" width="136" height="72" rx="3" fill="#F1F1F1" stroke="#444444" stroke-width="1.2"/>
+<text x="446.0" y="265.8" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Grade claims</text>
+<text x="446.0" y="279.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">design, perturbation,</text>
+<text x="446.0" y="293.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">controls</text>
+<polygon points="228,238 336,238 350,274.0 336,310 228,310 214,274.0" fill="#E6EDF8" stroke="#2F4B7C" stroke-width="1.4"/>
+<text x="282.0" y="265.8" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Compare claims</text>
+<text x="282.0" y="279.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">same finding?</text>
+<text x="282.0" y="293.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">real conflict?</text>
+<path d="M50,247 A68.0,9 0 0 1 186,247 V301 A68.0,9 0 0 1 50,301 Z" fill="#FFF2CC" stroke="#8A6D1D" stroke-width="1.4"/>
+<path d="M50,247 A68.0,9 0 0 0 186,247" fill="none" stroke="#8A6D1D" stroke-width="1.4"/>
+<text x="118.0" y="271.8" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Evidence graph</text>
+<text x="118.0" y="285.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">steps keyed by</text>
+<text x="118.0" y="299.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">concept IDs</text>
+<path d="M774,156 V238" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<path d="M706,274 H678" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<path d="M542,274 H514" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<path d="M378,274 H350" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<path d="M214,274 H186" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<rect x="24" y="392" width="876" height="336" rx="8" fill="#FAFAFA" stroke="#BDBDBD" stroke-width="1"/>
+<text x="46" y="416" font-size="17" font-weight="bold" fill="#111111" text-anchor="start">c</text>
+<text x="64" y="416" font-size="14" font-weight="bold" fill="#111111" text-anchor="start">Weigh competing pathways</text>
+<text x="884" y="415" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="end" font-style="italic">pathways compete; the search budget follows the evidence</text>
+<polygon points="74,436 236,436 250,462.0 236,488 74,488 60,462.0" fill="#E6EDF8" stroke="#2F4B7C" stroke-width="1.4"/>
+<text x="155.0" y="460.5" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">LLM proposals</text>
+<text x="155.0" y="474.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">diverse routes, once</text>
+<rect x="60" y="500" width="190" height="52" rx="3" fill="#F1F1F1" stroke="#444444" stroke-width="1.2"/>
+<text x="155.0" y="524.5" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Literature-graph routes</text>
+<text x="155.0" y="538.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">found by code search</text>
+<polygon points="74,564 236,564 250,590.0 236,616 74,616 60,590.0" fill="#E6EDF8" stroke="#2F4B7C" stroke-width="1.4"/>
+<text x="155.0" y="588.5" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Gated expansion</text>
+<text x="155.0" y="602.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">≤ 1 per round, ≥ 2 papers</text>
+<path d="M118,310 V384 H34 V590" fill="none" stroke="#333333" stroke-width="1.3"/>
+<path d="M34,462 H60" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<path d="M34,526 H60" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<path d="M34,590 H60" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<path d="M250,462 H272 V590 M250,526 H272 M250,590 H272" fill="none" stroke="#333333" stroke-width="1.3"/>
+<path d="M296,493 A60.0,9 0 0 1 416,493 V559 A60.0,9 0 0 1 296,559 Z" fill="#FFF2CC" stroke="#8A6D1D" stroke-width="1.4"/>
+<path d="M296,493 A60.0,9 0 0 0 416,493" fill="none" stroke="#8A6D1D" stroke-width="1.4"/>
+<text x="356.0" y="523.8" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Pathway</text>
+<text x="356.0" y="537.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">portfolio</text>
+<text x="356.0" y="551.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">up to 6 routes</text>
+<path d="M272,526 H296" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<rect x="450" y="486" width="170" height="80" rx="3" fill="#F1F1F1" stroke="#444444" stroke-width="1.2"/>
+<text x="535.0" y="511.0" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Score &amp; verdict</text>
+<text x="535.0" y="525.0" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">weakest step × logic factor</text>
+<text x="535.0" y="538.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">Supported / Contradicted /</text>
+<text x="535.0" y="552.0" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">Insufficient evidence</text>
+<path d="M416,526 H450" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<rect x="654" y="486" width="170" height="80" rx="3" fill="#F1F1F1" stroke="#444444" stroke-width="1.2"/>
+<text x="739.0" y="511.0" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Allocate searches</text>
+<text x="739.0" y="525.0" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">exploit decisive steps,</text>
+<text x="739.0" y="538.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">explore rival pathways</text>
+<text x="739.0" y="552.0" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">3 targets per round</text>
+<path d="M620,526 H654" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<polygon points="739.0,600 814,640.0 739.0,680 664,640.0" fill="#FFFFFF" stroke="#111111" stroke-width="1.6"/>
+<text x="739.0" y="645.5" font-size="13" font-weight="bold" fill="#111111" text-anchor="middle">Stop?</text>
+<path d="M739,566 V600" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<rect x="430" y="612" width="180" height="56" rx="28.0" fill="#FFFFFF" stroke="#111111" stroke-width="1.8"/>
+<text x="520.0" y="638.5" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Cited report</text>
+<text x="520.0" y="652.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">every sentence verified</text>
+<path d="M664,640 H610" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
+<text x="637" y="632" font-size="10.5" font-weight="bold" fill="#555555" text-anchor="middle">yes</text>
+<text x="826" y="632" font-size="10.5" font-weight="bold" fill="#555555" text-anchor="start">no</text>
+<text x="739" y="698" font-size="10" font-weight="normal" fill="#555555" text-anchor="middle" font-style="italic">Stops when nothing is left to search, the leader cannot</text>
+<text x="739" y="711" font-size="10" font-weight="normal" fill="#555555" text-anchor="middle" font-style="italic">be overtaken, or the round limit is reached</text>
+<path d="M814,640 H925 V46 H358 V100" fill="none" stroke="#333333" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<text x="900" y="40" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="end" font-style="italic">next round: targeted queries for the most decisive open steps</text>
+<rect x="24" y="744" width="876" height="72" rx="8" fill="#FFFFFF" stroke="#BDBDBD" stroke-width="1"/>
+<text x="46" y="768" font-size="12" font-weight="bold" fill="#111111" text-anchor="start">Key</text>
+<rect x="46" y="780" width="40" height="22" rx="11.0" fill="#FFFFFF" stroke="#111111" stroke-width="1.8"/>
+<text x="96" y="796" font-size="11" font-weight="normal" fill="#111111" text-anchor="start">Input / output</text>
+<polygon points="210,780 222,780 236,791.0 222,802 210,802 196,791.0" fill="#E6EDF8" stroke="#2F4B7C" stroke-width="1.4"/>
+<text x="246" y="796" font-size="11" font-weight="normal" fill="#111111" text-anchor="start">LLM call</text>
+<rect x="346" y="780" width="40" height="22" rx="3" fill="#F1F1F1" stroke="#444444" stroke-width="1.2"/>
+<text x="396" y="796" font-size="11" font-weight="normal" fill="#111111" text-anchor="start">Deterministic code</text>
+<path d="M518,789 A20.0,9 0 0 1 558,789 V797 A20.0,9 0 0 1 518,797 Z" fill="#FFF2CC" stroke="#8A6D1D" stroke-width="1.4"/>
+<path d="M518,789 A20.0,9 0 0 0 558,789" fill="none" stroke="#8A6D1D" stroke-width="1.4"/>
+<text x="568" y="796" font-size="11" font-weight="normal" fill="#111111" text-anchor="start">Data store</text>
+<polygon points="688.0,780 708,791.0 688.0,802 668,791.0" fill="#FFFFFF" stroke="#111111" stroke-width="1.6"/>
+<text x="718" y="796" font-size="11" font-weight="normal" fill="#111111" text-anchor="start">Decision</text>
+<path d="M818,791 H858" fill="none" stroke="#333333" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<text x="868" y="796" font-size="11" font-weight="normal" fill="#111111" text-anchor="start">Next round</text>
+</svg>

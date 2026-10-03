@@ -19,18 +19,9 @@ Ask *"Does X affect Y, and through which mechanisms?"*. B-MiRA searches PubMed, 
 
 ## How it works
 
-```mermaid
-flowchart TD
-    Q[Your question] --> S[Search PubMed]
-    S --> E[Extract claims from papers<br/>quote-checked against the source]
-    E --> G[Grade each claim<br/>study design, perturbation, controls]
-    G --> K[Update the evidence graph<br/>steps keyed by ontology concepts]
-    K --> P[Pathway portfolio<br/>LLM proposals + routes found in the graph]
-    P --> V[Verdict per step and pathway]
-    V --> D{Anything worth<br/>searching next?}
-    D -- yes --> T[Targeted search on the most decisive steps] --> E
-    D -- no --> R[Report + verification]
-```
+<p align="center"><img src="docs/figure1.svg" alt="B-MiRA architecture in three panels: a, retrieve papers; b, build the evidence graph; c, weigh competing pathways, with a loop back to targeted search until the stop rule fires" width="100%"></p>
+
+**Figure 1 | B-MiRA architecture.** **a**, A question is parsed into search queries; PubMed and Europe PMC are searched and papers are screened. **b**, Claims are extracted with quote checks, normalized to ontology concepts, graded, and compared into a shared evidence graph. **c**, Candidate pathways from three sources compete: each is scored by its weakest step and given a verdict, and the next searches go to the steps that would most change the ranking. The loop repeats until the stop rule fires; a report is then written and every sentence is verified. Hexagons are LLM calls, rectangles are deterministic code. A 2× PNG for slides and papers is in [`docs/figure1.png`](docs/figure1.png).
 
 **The evidence graph.** Every claim like *"lactate lowers NAD⁺ in CD8 T cells"* becomes an edge between two concepts. Supporting, corroborating and opposing papers attach to the same edge, so a step's evidence is shared by every pathway that uses it.
 
@@ -94,6 +85,7 @@ The report and the run state can be downloaded as Markdown and JSON.
 
 ```
 app.py                    Streamlit chat interface
+docs/figure1.svg          Architecture figure (also .png)
 B-MiRA_workflow.ipynb     Walk-through notebook
 bmira/
   config.py               All tunable settings (one dataclass)
@@ -109,6 +101,7 @@ bmira/
   offline.py              Scripted model + synthetic corpus for key-free runs
   fixtures/               Synthetic test scenario (invented papers)
 tests/test_bmira.py       One test per design guarantee
+LICENSE  CITATION.cff     MIT license; citation metadata
 ```
 
 ## Main settings
@@ -132,11 +125,13 @@ All in `bmira/config.py`; the app exposes the round limit.
 
 ## Versioning
 
-**v2.0.0** is the first public release. It consolidates the internal prototypes (single-notebook versions 5–12) into a tested package, replaces the single mechanism chain with the pathway portfolio, and adds the chat interface.
+**v2.0.0** is the first public release. It consolidates the internal prototypes (single-notebook versions 5–12) into a tested package, replaces the single mechanism chain with the pathway portfolio, and adds the chat interface. It was published without a license file.
+
+**v2.0.1** adds the MIT license, citation metadata and the architecture figure. Use v2.0.1 or later.
 
 ## License
 
-MIT. See [LICENSE](LICENSE). Third-party dependencies and data sources are listed in [NOTICE](NOTICE). The papers in `bmira/fixtures/` are invented test data, not real literature.
+MIT. See [LICENSE](LICENSE). Dependencies keep their own licenses. Literature retrieved from PubMed, Europe PMC and the EBI Ontology Lookup Service is subject to those services' terms and is not stored in this repository. The papers in `bmira/fixtures/` are invented test data, not real literature.
 
 ## Citing
 
