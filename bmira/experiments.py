@@ -3,9 +3,11 @@
     python -m bmira.experiments                                  # all of experiments/questions.txt, live
     python -m bmira.experiments --only 1 3 --max-rounds 3        # a subset, cheaper
     python -m bmira.experiments --offline                        # wiring check, no keys or network
+    python -m bmira.experiments --replay runs/session_X_q1.state.json   # re-judge a saved run
 
 The file (default runs/session_<timestamp>.json) is rewritten after every question, so an
-interrupted session keeps its finished runs. Upload it to a new Claude session together
+interrupted session keeps its finished runs. Each run also leaves <session>_q<n>.state.json,
+which --replay re-judges with the current code without searching or extracting again. Upload it to a new Claude session together
 with the experiment protocol doc to plan revisions.
 """
 import argparse
@@ -19,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from bmira import Runtime, Settings, __version__
-from bmira.telemetry import execute, git_state, preflight, summarize
+from bmira.telemetry import execute, git_state, preflight, replay, save_state, summarize
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -56,12 +58,15 @@ def main(argv=None) -> Path:
     ap.add_argument("--no-preflight", action="store_true", help="skip the checks before the session")
     ap.add_argument("--offline", action="store_true", help="scripted model and synthetic papers")
     ap.add_argument("--quiet", action="store_true", help="do not echo the pipeline log")
+    ap.add_argument("--replay", type=Path, nargs="+",
+                    help="saved run states to re-judge with the current code (no search or extraction)")
     a = ap.parse_args(argv)
 
     if not a.offline and not os.environ.get("NCBI_EMAIL"):
         print("[WARN] NCBI_EMAIL is not set; NCBI asks every client for a contact address.")
     questions = load_questions(a.questions)
-    picked = [(i, q) for i, q in enumerate(questions, 1) if not a.only or i in a.only]
+    picked = list(enumerate(a.replay, 1)) if a.replay else \
+        [(i, q) for i, q in enumerate(questions, 1) if not a.only or i in a.only]
     out = a.out or ROOT / "runs" / f"session_{datetime.now():%Y%m%d_%H%M%S}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     overrides = {k: v for k, v in (("max_rounds", a.max_rounds), ("budget_tokens", a.budget_tokens)) if v}
@@ -69,7 +74,7 @@ def main(argv=None) -> Path:
     s = probe.settings
     session = {"session": {
         "started": datetime.now().isoformat(timespec="seconds"), "bmira_version": __version__,
-        "git": git_state(), "python": platform.python_version(), "mode": "offline" if a.offline else "live",
+        "git": git_state(), "python": platform.python_version(), "mode": "replay" if a.replay else "offline" if a.offline else "live",
         "provider": a.provider, "models": s.models.get(s.provider), "temperature": s.temperature,
         "reasoning_effort": s.reasoning_effort, "max_rounds": s.max_rounds, "budget_tokens": s.budget_tokens,
         "questions_file": str(a.questions), "argv": sys.argv[1:] if argv is None else argv}, "runs": []}
@@ -97,11 +102,15 @@ def main(argv=None) -> Path:
         t0 = time.time()
         try:
             rt, scenario = _runtime(a, overrides)
-            if scenario:
+            if scenario and not a.replay:
                 q = scenario["question"]                   # the scripted model only knows this one
-            print(f"\n=== [{i}/{len(questions)}] {q}", flush=True)
-            final, info = execute(q, rt, echo=not a.quiet)
+            print(f"\n=== [{i}/{len(picked) if a.replay else len(questions)}] {q}", flush=True)
+            final, info = replay(q, rt, echo=not a.quiet) if a.replay else execute(q, rt, echo=not a.quiet)
             run = summarize(final, rt, info)
+            if a.replay:
+                run["replay_of"] = str(q)
+            elif final.get("hypotheses"):                  # the portfolio ran, so a replay can start here
+                save_state(final, rt, out.with_name(f"{out.stem}_q{i}.state.json"))
         except Exception as e:                             # e.g. the runtime could not be built
             info = {"fatal": False}
             run = {"status": "failed", "run": {"question": q, "wall_seconds": round(time.time() - t0, 1)},

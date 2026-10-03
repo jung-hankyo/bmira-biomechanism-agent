@@ -741,3 +741,26 @@ def test_randomized_evidence_can_grade_strong():
     animal = _claim("a", "p", "decreases", perturbation_class="pharmacological")
     animal.text_access = "full_text"
     assert grade_claim(animal, "any").grade == "moderate"                # animal pharmacology unchanged
+
+
+def test_saved_run_replays_without_searching_or_rejudging(tmp_path):
+    """W1: a live run leaves a state file; a replay re-runs normalize -> verify on its claims
+    with the current code, never searches, and reuses the pair verdicts the run paid for."""
+    import json
+    from bmira.experiments import main
+    qs = tmp_path / "q.txt"
+    qs.write_text("only question\n", encoding="utf-8")
+    first = main(["--offline", "--quiet", "--questions", str(qs), "--out", str(tmp_path / "s.json")])
+    state = tmp_path / "s_q1.state.json"
+    assert state.exists()
+    assert all(not p["source_text"] for p in json.loads(state.read_text(encoding="utf-8"))["state"]["papers"])
+    again = main(["--offline", "--quiet", "--replay", str(state), "--out", str(tmp_path / "r.json")])
+    a = json.loads(first.read_text(encoding="utf-8"))["runs"][0]
+    session = json.loads(again.read_text(encoding="utf-8"))
+    b = session["runs"][0]
+    assert session["session"]["mode"] == "replay" and b["status"] == "completed" and b["replay_of"] == str(state)
+    assert not {"parse", "plan", "screen", "extract", "pair"} & set(b["llm"]["per_task"])
+    assert b["papers"] == a["papers"] and b["extraction"]["claims_kept"] == a["extraction"]["claims_kept"]
+    assert b["run"]["rounds"] == a["run"]["rounds"]
+    assert [p["verdict"] for p in b["pathways"]["ranked"]] == [p["verdict"] for p in a["pathways"]["ranked"]]
+    assert b["verification"]["passed"]

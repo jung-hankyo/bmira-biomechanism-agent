@@ -7,6 +7,7 @@ the code area to inspect. Thresholds are starting points, not validated cut-offs
 """
 import contextlib
 import io
+import json
 import re
 import subprocess
 import sys
@@ -26,6 +27,8 @@ from bmira.graph import build_agent
 from bmira.llm import FatalLLMError
 from bmira.normalize import lookup_key
 from bmira.portfolio import STATUS_LABEL, STOP_LABEL
+from bmira.schemas import (Claim, Conflict, Hypothesis, LinkEvidence, PairAdjudication, Paper,
+                           ParsedQuestion, SearchQuery)
 
 
 class _Tee(io.TextIOBase):
@@ -63,18 +66,22 @@ def _failing_node(e: BaseException) -> str | None:
     return node
 
 
-def execute(question: str, rt, on_progress=None, echo: bool = True):
+def execute(question: str, rt, on_progress=None, echo: bool = True, resume: dict | None = None):
     """Run one investigation. Returns (final_state, run_info). `on_progress(nodes, new_lines)`
-    is called on the caller's thread after every graph step (used by the Streamlit app)."""
+    is called on the caller's thread after every graph step (used by the Streamlit app).
+    `resume`: a saved state that re-enters the graph right after extraction (see replay)."""
     agent = build_agent(rt)
     cfg = {"configurable": {"thread_id": f"bmira-{uuid.uuid4()}"}, "recursion_limit": 250}
+    if resume:
+        agent.update_state(cfg, resume, as_node="extract")
     log, shown = _Tee(echo), 0
     node_seconds, t0 = Counter(), time.perf_counter()
     last = t0
     info = {"question": question, "status": "completed", "error": None, "failed_node": None, "fatal": False}
     with contextlib.redirect_stdout(log):
         try:
-            for update in agent.stream({"question": question}, cfg, stream_mode="updates"):
+            for update in agent.stream(None if resume else {"question": question}, cfg,
+                                       stream_mode="updates"):
                 now = time.perf_counter()
                 nodes = [n for n in update if not n.startswith("__")]
                 for n in nodes:                # parallel extractions share the elapsed time
@@ -94,6 +101,60 @@ def execute(question: str, rt, on_progress=None, echo: bool = True):
     info.update(wall_seconds=round(time.perf_counter() - t0, 1), log=log.lines,
                 node_seconds={k: round(v, 1) for k, v in node_seconds.most_common()})
     return agent.get_state(cfg).values, info
+
+
+# ── saved runs and replay ───────────────────────────────────────────────────
+# State keys holding B-MiRA models; a JSON round trip turns them into dicts.
+STATE_MODELS = {"parsed": ParsedQuestion, "queries": SearchQuery, "papers": Paper, "claims": Claim,
+                "dropped_claims": Claim, "conflicts": Conflict, "hypotheses": Hypothesis,
+                "semantic_edges": PairAdjudication}
+
+
+def _plain(x):
+    return x.model_dump() if isinstance(x, BaseModel) else x
+
+
+def save_state(final: dict, rt, path: Path):
+    """What a replay needs: the final graph state (full texts dropped, abstracts kept) and the
+    pair, conflict and alias verdicts the run paid for, keyed by claim or concept ids."""
+    st = {**final, "papers": [{**_plain(p), "source_text": ""} for p in final.get("papers", [])]}
+    keyed = lambda cache: [[sorted(k), _plain(v)] for k, v in cache.items()]
+    data = {"bmira_version": __version__, "git_commit": git_commit(), "state": st,
+            "pair_cache": keyed(rt.pair_cache), "conflict_cache": keyed(rt.conflict_cache),
+            "alias_verdicts": keyed(rt.alias_verdicts)}
+    path.write_text(json.dumps(data, ensure_ascii=False,
+                               default=lambda o: o.model_dump() if isinstance(o, BaseModel) else str(o)),
+                    encoding="utf-8")
+
+
+def load_state(path, rt) -> dict:
+    """A saved state as models again; the run's verdicts go into `rt`'s caches."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    st = data["state"]
+    for k, model in STATE_MODELS.items():
+        if k in st:
+            st[k] = model.model_validate(st[k]) if k == "parsed" else [model.model_validate(x) for x in st[k]]
+    st["links"] = {k: LinkEvidence.model_validate(v) for k, v in st.get("links", {}).items()}
+    rt.pair_cache.update({frozenset(k): PairAdjudication.model_validate(v) for k, v in data["pair_cache"]})
+    rt.conflict_cache.update({frozenset(k): Conflict.model_validate(v) for k, v in data["conflict_cache"]})
+    rt.alias_verdicts.update({frozenset(k): v for k, v in data["alias_verdicts"]})
+    return st
+
+
+def replay(path, rt, echo: bool = True):
+    """Re-judge a saved run's last round with the current code: normalize -> semantic ->
+    portfolio -> synthesize -> verify on the same claims. Nothing is searched, screened or
+    extracted and known verdicts are reused, so a replay pays for new judgements and the
+    synthesis only.
+
+    # ponytail: relation typing and the loss-word restatement are not redone (claims keep
+    # their typed relation), and seeded pathways keep their concept keys; fixes there still
+    # need a live run.
+    """
+    st = load_state(path, rt)
+    st["round_idx"] -= 1                           # the last round again, not a new one
+    rt.settings.max_rounds = st["round_idx"] + 1   # so the portfolio can only end the run
+    return execute(st["question"], rt, echo=echo, resume=st)
 
 
 # ── summary ─────────────────────────────────────────────────────────────────
