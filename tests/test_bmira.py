@@ -868,6 +868,26 @@ def test_local_cell_subtypes_inherit_the_cell_type_they_name():
     assert ln.n_studies == 2                                              # the subtype finding counts (R9)
 
 
+# P1-P6: fixes from the pilot5 live run (butyrate -> Treg).
+def test_quote_check_reads_the_first_use_of_the_verb():
+    """Pilot5 dropped these as 'quote negates the claimed effect'."""
+    from bmira.normalize import check_claim
+
+    def verdict(subj, rel, obj, span):
+        c = _claim("c", "p", "increases")
+        c.subject, c.relation, c.object, c.span = subj, rel, obj, span
+        return check_claim(c, span)[0]
+    contrast = ("SB also clearly inhibited the phosphorylation of AKT and NF-kB p65 in LPS-induced WT mouse primary "
+                "peritoneal macrophages, but failed to inhibit this phenomenon in LPS-induced GPR109a-/- macrophages.")
+    assert verdict("SB", "inhibited", "AKT", contrast) == ""
+    assert verdict("butyrate", "promote", "Tregs", "These genes suggest that butyrate could not only promote Tregs "
+                   "but also suppress Tconvs and inflammatory cytokines.") == ""
+    assert verdict("butyrate", "increased", "Foxp3", "Butyrate did not increase Foxp3, whereas propionate "
+                   "increased Foxp3 in the same cultures.") == "quote negates the claimed effect"
+    assert verdict("butyrate", "induced", "IL-10", "Butyrate failed to induce IL-10 in naive T cells.") \
+        == "quote negates the claimed effect"
+
+
 def test_split_exposure_and_off_portfolio_support_are_signalled():
     """Pilot4's real failure left no signal: 25 claims on butyrate variants and Supported steps
     on no pathway, with fragmentation reading a healthy 0.32."""

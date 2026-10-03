@@ -627,7 +627,8 @@ def abbreviations(text: str) -> list[tuple[str, str]]:
 STOP = {"the", "and", "with", "cells", "cell", "human", "mouse", "mice", "levels", "level", "expression"}
 NULL_CUE = re.compile(r"\b(?:no|not|never|neither|nor|unchanged|unaffected|without|fail(?:ed|s)?|"
                       r"lack(?:s|ed|ing)?|similar|comparable|independent of)\b")
-BUT_NOT = re.compile(r"\bbut not\s+[\w\-+]+")      # 'butyrate but not pentanoate exerts': negates the other agent
+# 'butyrate but not pentanoate exerts': negates the other agent; 'not only promote': no negation
+BUT_NOT = re.compile(r"\bbut not\s+[\w\-+]+|\bnot only\b")
 NEGATORS = {"no", "not", "never", "neither", "nor", "without", "failed", "fail", "fails"}
 
 
@@ -683,6 +684,8 @@ def check_claim(c, source: str, abbrevs=()) -> tuple[str, list[str]]:
     hits = [i for i, w in enumerate(words) if any(w.startswith(v[:4]) for v in verbs)]
     if not hits:
         return "", ["relation wording not in quote"]
-    if any(NEGATORS & set(words[max(0, i - 3):i]) for i in hits):
+    # the first use of the verb carries the claim; a later contrast clause ('SB inhibited AKT ...,
+    # but failed to inhibit it in GPR109a-/- cells') does not negate it (pilot5: 3 of 6 drops false)
+    if NEGATORS & set(words[max(0, hits[0] - 3):hits[0]]):
         return "quote negates the claimed effect", []
     return "", []
