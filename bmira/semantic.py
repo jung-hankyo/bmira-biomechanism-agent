@@ -143,18 +143,27 @@ def triage(claims, cands, llm):
     if not cands:
         return [], "NO_CANDIDATES"
     by_id = {c.id: c for c in claims}
+    asked = cands[:20]
     text = "\n\n".join(
-        f"CANDIDATE {f.key}\n" + "\n".join(
+        f"[CANDIDATE {n}]\n" + "\n".join(
             f"[{i}] {by_id[i].subject_label} --{by_id[i].relation_norm}--> {by_id[i].object_label}"
             f" | stance={stance(by_id[i])} | context={by_id[i].context_cell_type}; "
             f"{by_id[i].context_model} | PMID {by_id[i].pmid}" for i in f.claim_ids[:30])
-        for f in cands[:20])
+        for n, f in enumerate(asked, 1))
     try:
         out = llm.structured("conflict", ConflictBatch, PROMPTS["conflict"], text,
-                             ctx={"candidates": [(f, [by_id[i] for i in f.claim_ids]) for f in cands[:20]]},
-                             n_items=len(cands[:20]))
+                             ctx={"candidates": [(f, [by_id[i] for i in f.claim_ids]) for f in asked]},
+                             n_items=len(asked))
     except Exception as e:
         print(f"[conflict] triage failed: {type(e).__name__}")
         return [], "LLM_FAILED"
-    keys = {f.key for f in cands}
-    return [c for c in out.conflicts if c.cluster_key in keys], "COMPLETE"
+    by_key = {f.key: f for f in asked}
+    kept = []
+    for c in out.conflicts:
+        # Verdicts name their candidate by number; echoing 'SEM::C22724664_0' lost 10 of 11 in pilot5
+        # (the same fault K5 fixed for pair verdicts). A scripted model may still return the key.
+        m = re.fullmatch(r"\D*(\d{1,2})\D*", c.cluster_key.strip())
+        f = by_key.get(c.cluster_key.strip()) or (asked[int(m.group(1)) - 1] if m and 1 <= int(m.group(1)) <= len(asked) else None)
+        if f:
+            kept.append(c.model_copy(update={"cluster_key": f.key}))
+    return kept, "COMPLETE"

@@ -888,6 +888,28 @@ def test_quote_check_reads_the_first_use_of_the_verb():
         == "quote negates the claimed effect"
 
 
+def test_conflict_verdicts_are_matched_by_number_not_echoed_keys():
+    """Pilot5 asked 11 candidates and kept 1: the model had to echo 'SEM::C22724664_0'."""
+    from bmira.schemas import Cluster, Conflict, ConflictBatch
+    from bmira.semantic import triage
+    claims = [_claim(i, "p", "increases") for i in "ab"]
+    cands = [Cluster(key=f"SEM::{k}", claim_ids=["a", "b"], discordant=1) for k in ("C22724664_0", "C1_0", "C2_1")]
+
+    class LLM:
+        def __init__(self, keys):
+            self.keys, self.prompt = keys, ""
+
+        def structured(self, task, schema, system, user, **kw):
+            self.prompt = user
+            return ConflictBatch(conflicts=[Conflict(cluster_key=k, verdict="context_dependent", explanation="e")
+                                            for k in self.keys])
+    llm = LLM(["1", "CANDIDATE 2", "[3]", "7", "nonsense"])
+    out, status = triage(claims, cands, llm)
+    assert status == "COMPLETE" and [c.cluster_key for c in out] == ["SEM::C22724664_0", "SEM::C1_0", "SEM::C2_1"]
+    assert "[CANDIDATE 1]" in llm.prompt and "SEM::" not in llm.prompt          # nothing to echo
+    assert [c.cluster_key for c in triage(claims, cands, LLM(["SEM::C1_0"]))[0]] == ["SEM::C1_0"]   # a scripted model
+
+
 def test_plan_matches_target_ids_leniently_and_says_when_it_drops_queries(capsys):
     """Pilot5 ran 3 queries for 3 targets (pilot4: 12) and nothing said why."""
     from bmira.graph import plan

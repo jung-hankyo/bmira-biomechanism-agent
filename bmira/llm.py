@@ -96,7 +96,8 @@ PROMPTS = {
         "context_dependent: findings differ because cell type, model, dose or timepoint differ. "
         "not_comparable: the claims do not measure the same thing, or a method artifact explains "
         "the difference. Say which in the explanation, and give a discriminating experiment. "
-        "Leave claim_ids empty."),
+        "Return one verdict per candidate, with `cluster_key` set to the number n of "
+        "'[CANDIDATE n]' (just the number). Leave claim_ids empty."),
     "seed": (
         "Propose {k} DIFFERENT candidate mechanistic pathways from exposure to outcome, each an "
         "ordered list of links (source, relation, target) using the closed relation vocabulary. "

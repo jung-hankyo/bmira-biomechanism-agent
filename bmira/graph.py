@@ -84,6 +84,7 @@ class State(TypedDict, total=False):
     semantic_status: str
     semantic_edges: list
     conflicts: list
+    conflict_candidates: int
     conflict_status: str
     links: dict
     hypotheses: list
@@ -405,7 +406,8 @@ def semantic(state, rt):
     print(f"[semantic] {len(pairs)} candidate pairs ({len(new)} new) status={status}; "
           f"{len(cands)} conflict candidates, {len(conflicts)} triaged")
     return {"semantic_status": status, "semantic_edges": list(rt.pair_cache.values()),
-            "conflicts": conflicts, "conflict_status": cstatus if fresh else "COMPLETE"}
+            "conflicts": conflicts, "conflict_status": cstatus if fresh else "COMPLETE",
+            "conflict_candidates": len(cands)}
 
 
 def _canon(cid, rt):

@@ -315,6 +315,8 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "pairs_asked": getattr(llm, "items", zero)["pair"],
             "same_finding": sum(v.same_finding for v in pairs), "same_context": sum(v.same_context for v in pairs),
             "conflict_status": final.get("conflict_status"),
+            "conflict_candidates": final.get("conflict_candidates"),
+            "conflicts_triaged": len(final.get("conflicts", [])),
             "conflicts": _count(c.verdict for c in final.get("conflicts", []))},
         "steps": {
             "count": len(links), "verdicts": _count(STATUS_LABEL[ln.status] for ln in links.values()),
@@ -453,6 +455,9 @@ RULES = [
     ("pair verdicts lost", lambda m: _share(m["comparison"]["pairs_judged"], m["comparison"]["pairs_asked"]),
      lambda v: v is not None and v < 0.5, "< 0.5 of asked pairs judged",
      "semantic.adjudicate pair numbering; PROMPTS['pair']; the model returned fewer or mis-numbered verdicts"),
+    ("conflict verdicts lost", lambda m: (m["comparison"]["conflicts_triaged"], m["comparison"]["conflict_candidates"]),
+     lambda v: v[1] is not None and v[1] >= 3 and v[0] / v[1] < 0.5, "< 0.5 of >= 3 candidates triaged",
+     "semantic.triage numbering; PROMPTS['conflict']; untriaged conflicts count as contradictions"),
     ("one label, several concepts", lambda m: m["normalization"]["duplicate_labels"],
      lambda v: len(v) > 0, "> 0 labels", "normalize.EntityResolver._labelled / consolidate_aliases"),
     ("exposure split", lambda m: m["normalization"]["exposure_variants"]["claims"],
