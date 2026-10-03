@@ -332,23 +332,28 @@ def allocate(hyps, links, settings, round_idx: int) -> list[str]:
     live = [h for h in hyps if h.open]
     if not live:
         return []
-    raw = [math.exp(h.score / settings.softmax_temperature) for h in live]
+    # Weight by progress along the route, not by the weakest step (the verdict score): every
+    # unstarted mechanism route scores 0 there and got the same weight, and a direct route's
+    # 0.4 outweighed all of them (pilot4: the HDAC route was never targeted).
+    progress = {h.id: sum(links[k].completeness for k in h.links) / max(1, len(h.links)) for h in live}
+    raw = [math.exp(progress[h.id] / settings.softmax_temperature) for h in live]
     w = {h.id: x / sum(raw) for h, x in zip(live, raw)}
-    prio, owner = defaultdict(float), defaultdict(set)
+    prio, owner, near = defaultdict(float), defaultdict(set), {}
     for h in live:
-        for k in set(h.links):
+        for i, k in enumerate(h.links):
             ln = links[k]
             if ln.exhausted or ln.status == "supported":
                 continue
-            prio[k] += w[h.id] * (1 - ln.completeness)
+            prio[k] += w[h.id] * (1 - ln.completeness) / (1 + i)       # nearest the exposure first
             owner[k].add(h.id)
+            near[k] = min(near.get(k, i), i)
     bonus = {k: settings.ucb_beta * math.sqrt(math.log(round_idx + 2) / (1 + links[k].times_targeted))
              for k in prio}
-    ranked = sorted(prio, key=lambda k: (-(prio[k] + bonus[k]), k))
+    ranked = sorted(prio, key=lambda k: (-(prio[k] + bonus[k]), near[k], k))
     n_explore = min(settings.exploration_slots, settings.targets_per_round)
     chosen = ranked[:settings.targets_per_round - n_explore]
     leader = max(live, key=lambda h: (h.score, h.id)).id
-    explore = [k for k in sorted(prio, key=lambda k: (-bonus[k], -prio[k], k))
+    explore = [k for k in sorted(prio, key=lambda k: (-bonus[k], -prio[k], near[k], k))
                if k not in chosen and owner[k] - {leader}]
     chosen += explore[:n_explore]
     chosen += [k for k in ranked if k not in chosen][:settings.targets_per_round - len(chosen)]

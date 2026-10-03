@@ -88,6 +88,23 @@ def test_allocation_explores():
     assert "A|increases|Z" in pf.allocate(hyps, links, s, 1)
 
 
+def test_allocation_prefers_the_step_nearest_the_exposure():
+    """Pilot4: equal-priority steps were ordered by key string, so CHEBI-keyed links beat the
+    HDAC route's NCIT and LOCAL steps. The later step here sorts first alphabetically."""
+    s = Settings(targets_per_round=1, exploration_slots=0)
+    first, later = "Z|increases|Y", "Y|increases|A"
+    links = {k: pf.LinkEvidence(key=k, subject=k[0], relation="increases", object=k[-1]) for k in (first, later)}
+    hyps = [Hypothesis(id="H1", name="chain", origin="llm_seed", links=[first, later])]
+    assert pf.allocate(hyps, links, s, 1) == [first]
+    # progress along a route, not its weakest step, sets its weight: a started route beats an unstarted one
+    started = pf.LinkEvidence(key="S|increases|T", subject="S", relation="increases", object="T", completeness=0.4)
+    idle = pf.LinkEvidence(key="I|increases|J", subject="I", relation="increases", object="J")
+    two = {**links, started.key: started, idle.key: idle}
+    hyps = [Hypothesis(id="H2", name="started", origin="llm_seed", links=[started.key, later]),
+            Hypothesis(id="H3", name="idle", origin="llm_seed", links=[idle.key, first])]
+    assert pf.allocate(hyps, two, s, 1) == [started.key]     # by min-step score both routes weigh 0 and idle wins
+
+
 # P4: more evidence never lowers a link; counted contradiction blocks support.
 def test_link_aggregation():
     s, labels = Settings(), {}
