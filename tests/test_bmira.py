@@ -851,6 +851,20 @@ def test_local_cell_subtypes_inherit_the_cell_type_they_name():
     assert ln.n_studies == 2                                              # the subtype finding counts (R9)
 
 
+def test_seeded_pathways_end_at_the_first_readout():
+    """Pilot4's H1 ended 'FOXP3 -> regulatory T cell': FOXP3 is a readout, so that link is a
+    definition and no paper states it. The step stayed 'not found' and the pathway stuck at 0."""
+    from bmira.schemas import ProposedLink, ProposedPathway
+    r = EntityResolver(Settings(ontology_provider="off"))
+    chain = [("butyrate", "decreases", "HDAC"), ("HDAC", "decreases", "Histone H3"),
+             ("Histone H3", "increases", "FOXP3"), ("FOXP3", "increases", "regulatory T cell")]
+    pw = ProposedPathway(name="p", links=[ProposedLink(source=s, relation=rel, target=t) for s, rel, t in chain])
+    full, _ = pf.proposal_keys(pw, r)
+    cut, _ = pf.proposal_keys(pw, r, {r.resolve("FOXP3").id, r.resolve("regulatory T cell").id})
+    assert len(full) == 4 and cut == full[:3]
+    assert pf.proposal_keys(pw, r, {r.resolve("butyrate").id})[0] == full           # a start is not an end
+
+
 def test_binding_has_no_direction_and_signed_effects_show_modulation():
     """Pilot4: 'butyrate binds HCAR2' was split from 'HCAR2 binds butyrate' (the only moderate
     paper), and 'butyrate modulates DCs' was 'not found' beside 'butyrate increases DCs'."""

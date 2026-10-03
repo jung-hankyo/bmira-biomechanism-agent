@@ -455,7 +455,7 @@ def portfolio(state, rt):
                 + f"\nOutcome: {p.outcome}\nClaims:\n{_claims_summary(claims)}",
                 ctx={"parsed": p, "claims": claims})
             for pw in out.pathways[:s.n_seed_hypotheses]:
-                keys, lab = pf.proposal_keys(pw, r)
+                keys, lab = pf.proposal_keys(pw, r, outcomes)
                 labels.update(lab)
                 _add(hyps, keys, "llm_seed", pw.name, pw.rationale, diverse=True)
             seed_status = "OK"
@@ -485,7 +485,7 @@ def portfolio(state, rt):
                     pf.label_pathway(h, links) for h in hyps) + f"\nClaims:\n{_claims_summary(claims)}",
                 ctx={"novel": [labels.get(n, n) for n in novel], "parsed": p})
             for pw in out.pathways:
-                keys, lab = pf.proposal_keys(pw, r)
+                keys, lab = pf.proposal_keys(pw, r, outcomes)
                 labels.update(lab)
                 if _add(hyps, keys, "llm_expansion", pw.name, pw.rationale, diverse=True):
                     break

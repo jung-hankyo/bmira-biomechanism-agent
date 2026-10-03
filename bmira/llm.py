@@ -97,7 +97,10 @@ PROMPTS = {
         "ordered list of links (source, relation, target) using the closed relation vocabulary. "
         "Pathways must differ in their intermediate steps: parallel, convergent and "
         "context-specific routes are all welcome. Use entity names exactly as in the claim list "
-        "where possible. Include a link even if no claim supports it yet."),
+        "where possible. Include a link even if no claim supports it yet. Every link must be "
+        "one that a primary study could test with the exposure present (for example 'butyrate "
+        "increases histone H3 acetylation'), not textbook background; stop the pathway at the "
+        "first readout of the outcome."),
     "expand": (
         "The evidence ledger contains intermediates that no current pathway uses. If any of "
         "them suggests a distinct, biologically coherent route from exposure to outcome, "

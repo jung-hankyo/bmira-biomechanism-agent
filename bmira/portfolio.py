@@ -188,7 +188,9 @@ def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, e
 
 
 # ── pathways ────────────────────────────────────────────────────────────────
-def proposal_keys(pathway, resolver) -> tuple[list[str], dict]:
+def proposal_keys(pathway, resolver, stop_at=frozenset()) -> tuple[list[str], dict]:
+    """Concept keys of a proposed pathway. It ends at the first link that reaches the outcome or
+    one of its readouts: 'FOXP3 -> regulatory T cell' is a definition, no paper tests it (pilot4's H1)."""
     keys, labels = [], {}
     for ln in pathway.links:
         if ln.relation not in RELATION_SET - {"unresolved"}:
@@ -200,6 +202,8 @@ def proposal_keys(pathway, resolver) -> tuple[list[str], dict]:
         if rel in DIRECTION and (entity_change(ln.source) == "down") != (entity_change(ln.target) == "down"):
             rel = "decreases" if rel == "increases" else "increases"
         keys.append(link_key(s.id, rel, o.id))
+        if resolver.canonical(o).id in stop_at:
+            break
     return keys, labels
 
 
