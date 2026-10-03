@@ -888,6 +888,23 @@ def test_quote_check_reads_the_first_use_of_the_verb():
         == "quote negates the claimed effect"
 
 
+def test_entailment_judge_sees_the_study_system_and_design():
+    """Pilot5: 9 of 12 entailment issues said the citation 'does not establish' an animal / human /
+    cross-sectional study. The judge was shown only grade, relation and cell type."""
+    from types import SimpleNamespace
+    from bmira.graph import _entailment
+    from bmira.schemas import EntailmentBatch
+    seen = []
+
+    class LLM:
+        def structured(self, task, schema, system, user, **kw):
+            seen.append(user)
+            return EntailmentBatch(judgements=[])
+    c = _claim("C1", "p", "increases", system="human_primary_cells", study_type="human_cohort")
+    _entailment("Butyrate increases Treg readouts in a human cohort [C1].", [c], SimpleNamespace(llm=LLM()))
+    assert "system: human_primary_cells" in seen[0] and "design: human_cohort" in seen[0]
+
+
 def test_one_direct_route_per_outcome_and_a_slot_left_for_expansion():
     """Pilot5 (after N8) had 13 pathways: seven direct routes, four to Treg differing only in relation;
     and the last slots went to routes repeating seeds, so expansion never ran."""

@@ -112,7 +112,7 @@ def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, e
                 rolled[(c.subject_concept, up)].append(c)
     m, thr = settings.min_studies_per_link, settings.contradiction_threshold
     out = {}
-    for key in keys:
+    for key in sorted(keys):                    # a set: its order changed with the string-hash seed, and with it pathway ids
         s, r, o = split_key(key)
         exact = by_pair.get((s, o), [])
         if r == "binds":                        # 'HCAR2 binds butyrate' is 'butyrate binds HCAR2'
@@ -290,7 +290,9 @@ def ledger_paths(links, exposure: str, outcomes: set, max_len: int) -> list[list
                 walk(nxt, path + [k], seen | {nxt})
 
     walk(exposure, [], {exposure})
-    return sorted(found, key=lambda p: -min(links[k].completeness for k in p))
+    # ties: signed relations before 'modulates'/'associated_with' (more informative), then by key
+    return sorted(found, key=lambda p: (-min(links[k].completeness for k in p),
+                                        sum(links[k].relation not in SIGNED for k in p), p))
 
 
 def novel_intermediates(links, hyps, exposure, outcomes) -> list[str]:

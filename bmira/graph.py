@@ -648,8 +648,11 @@ def _entailment(text, claims, rt):
     if not items:
         return []
     user = "\n\n".join(f"[SENTENCE {i}] {s}\nCited:\n" + "\n".join(
+        # the system and design are what 'in animal studies' / 'a human cohort' are judged against; without
+        # them 9 of pilot5's 12 issues read 'does not establish that the study was animal / human'
         f"  [{c}] ({by_id[c].grade}) {by_id[c].subject_label} {by_id[c].relation_norm} "
-        f"{by_id[c].object_label} | {by_id[c].context_cell_type}" for c in ids) for i, s, ids in items)
+        f"{by_id[c].object_label} | system: {by_id[c].system}; design: {by_id[c].study_type}; "
+        f"cell type: {by_id[c].context_cell_type or 'unspecified'}" for c in ids) for i, s, ids in items)
     try:
         out = rt.llm.structured("entailment", EntailmentBatch, PROMPTS["entailment"], user,
                                 ctx={"items": items}, n_items=len(items))
