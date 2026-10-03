@@ -469,14 +469,18 @@ def portfolio(state, rt):
                   for a in c.claim_ids for b in c.claim_ids if a < b}
     extra = {k for h in hyps for k in h.links}
     links = pf.build_links(claims, prior, rt.pair_cache, labels, s, extra, discounted, ancestors)
+    slots = lambda: sum(not pf.is_direct(h) for h in hyps)       # direct routes take none (N8)
     for path in pf.ledger_paths(links, exposure, outcomes, s.max_path_len):
-        if len(hyps) >= s.max_hypotheses:      # no slot: adding then trimming would churn ids
-            break
+        direct = len(path) == 1
+        if direct and links[path[0]].object not in named:        # a subtype's direct route repeats the broader one
+            continue
+        if not direct and slots() >= s.max_hypotheses:           # no slot: adding then trimming would churn ids
+            continue
         via = [links[k].object_label for k in path[:-1]]
         _add(hyps, path, "ledger_path", "Literature-graph route" + (f" via {', '.join(via)}" if via
              else f": direct to {links[path[-1]].object_label}"), "found by graph search over supported steps", False)
     novel = pf.novel_intermediates(links, hyps, exposure, outcomes)
-    if novel and len(hyps) < s.max_hypotheses:            # gated expansion, at most one per round
+    if novel and slots() < s.max_hypotheses:              # gated expansion, at most one per round
         try:
             out = rt.llm.structured(
                 "expand", PathwayProposal, PROMPTS["expand"],

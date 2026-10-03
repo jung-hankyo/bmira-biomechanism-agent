@@ -851,6 +851,24 @@ def test_local_cell_subtypes_inherit_the_cell_type_they_name():
     assert ln.n_studies == 2                                              # the subtype finding counts (R9)
 
 
+def test_direct_routes_take_no_pathway_slot():
+    """Pilot4: H5 and its subtype H6 took two of six slots, so expansion never had room."""
+    s = Settings(max_hypotheses=2)
+    k = lambda a, b: pf.link_key(a, "increases", b)
+    hyps = [Hypothesis(id=i, name=i, origin=o, links=[k(a, b)]) for i, o, a, b in (
+        ("H1", "ledger_path", "A", "B"), ("H2", "ledger_path", "A", "C"),
+        ("H3", "llm_seed", "A", "M1"), ("H4", "llm_seed", "A", "M2"), ("H5", "llm_seed", "A", "M3"))]
+    claims = [_claim("c1", "p1", "increases", subj="A", obj="B"), _claim("c2", "p2", "increases", subj="A", obj="B"),
+              _claim("c3", "p3", "increases", grade="weak", subj="A", obj="C")]
+    links = pf.build_links(claims, {}, {}, {}, s, extra={h.links[0] for h in hyps})
+    kept = [h.id for h in pf.evaluate(hyps, links, {}, "none", s)]
+    assert "H1" in kept and "H2" in kept                       # both direct routes survive
+    assert sum(h in kept for h in ("H3", "H4", "H5")) == 2     # mechanism routes keep the cap
+    assert pf.is_direct(hyps[0]) and not pf.is_direct(hyps[2])
+    longer = Hypothesis(id="H6", name="x", origin="ledger_path", links=[k("A", "M1"), k("M1", "B")])
+    assert not pf.is_direct(longer)                            # a found multi-step route is a mechanism
+
+
 def test_seeded_pathways_end_at_the_first_readout():
     """Pilot4's H1 ended 'FOXP3 -> regulatory T cell': FOXP3 is a readout, so that link is a
     definition and no paper states it. The step stayed 'not found' and the pathway stuck at 0."""

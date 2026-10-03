@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from bmira.graph import build_agent
 from bmira.llm import FatalLLMError
 from bmira.normalize import lookup_key
-from bmira.portfolio import STATUS_LABEL, STOP_LABEL
+from bmira.portfolio import STATUS_LABEL, STOP_LABEL, is_direct
 from bmira.schemas import (Claim, Conflict, Hypothesis, LinkEvidence, PairAdjudication, Paper,
                            ParsedQuestion, SearchQuery)
 
@@ -307,6 +307,8 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "searched_out": sum(ln.exhausted for ln in links.values())},
         "pathways": {
             "count": len(hyps), "verdicts": _count(STATUS_LABEL[h.status] for h in hyps),
+            # direct exposure -> outcome routes answer the question; these count the mechanism routes
+            "mechanism_verdicts": _count(STATUS_LABEL[h.status] for h in hyps if not is_direct(h)),
             "origins": _count(h.origin for h in hyps), "logic_flags": _count(f for h in hyps for f in h.logic_flags),
             "leader_per_round": leaders,
             "leader_changes": sum(a != b for a, b in zip(leaders, leaders[1:])),
@@ -409,8 +411,9 @@ RULES = [
     ("unresolved relations", lambda m: _share(m["extraction"]["relations"].get("unresolved", 0),
                                               m["extraction"]["claims_kept"]),
      lambda v: v is not None and v > 0.20, "> 0.20", "normalize.RELATION_LEXICON / PROMPTS['relation']"),
-    ("no pathway supported", lambda m: m["pathways"]["verdicts"].get("Supported", 0),
-     lambda v: v == 0, "0", "evidence too sparse, or min_studies_per_link / R8 too strict for this field"),
+    ("no pathway supported", lambda m: m["pathways"]["mechanism_verdicts"].get("Supported", 0),
+     lambda v: v == 0, "0 mechanism routes",
+     "evidence too sparse, or min_studies_per_link / R8 too strict; a Supported direct route does not count"),
     ("many unfound steps", lambda m: _share(m["steps"]["reasons"].get("no study found in N targeted searches", 0),
                                             m["steps"]["count"]),
      lambda v: v is not None and v > 0.50, "> 0.50 of steps", "search recall: synonym query, plan prompt"),

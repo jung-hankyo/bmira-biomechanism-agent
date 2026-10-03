@@ -247,6 +247,13 @@ def logic_check(keys, links, categories, expected: str):
     return round(factor, 3), flags
 
 
+def is_direct(h) -> bool:
+    """A one-step exposure -> outcome route found in the literature: the answer to 'does X affect Y',
+    not a mechanism. It takes no pathway slot (pilot4: two of six slots went to H5 and its subtype H6,
+    which left no room for expansion)."""
+    return h.origin == "ledger_path" and len(h.links) == 1
+
+
 def is_duplicate(keys, hyps, diverse: bool) -> bool:
     """Exact duplicate always; for LLM proposals also >= 50% shared intermediates."""
     mid = set(nodes(keys)[1:-1])
@@ -315,7 +322,9 @@ def evaluate(hyps, links, categories, expected, settings):
     hyps.sort(key=lambda h: (-h.score, h.id))
     keep = [h for h in hyps if h.status == "supported"]
     rest = [h for h in hyps if h.status != "supported"]
-    return keep + rest[:max(0, settings.max_hypotheses - len(keep))]
+    room = max(0, settings.max_hypotheses - sum(not is_direct(h) for h in keep))
+    cut = {h.id for h in [h for h in rest if not is_direct(h)][room:]}          # direct routes are never cut
+    return keep + [h for h in rest if h.id not in cut]
 
 
 def allocate(hyps, links, settings, round_idx: int) -> list[str]:
