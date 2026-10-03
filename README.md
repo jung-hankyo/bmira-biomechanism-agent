@@ -1,6 +1,6 @@
 # B-MiRA — Biomedical Mechanism Inference Research Agent
 
-**v2.4** · LangGraph · Python 3.10+
+**v2.5** · LangGraph · Python 3.10+
 
 Ask *"Does X affect Y, and through which mechanisms?"*. B-MiRA searches PubMed, extracts claims from papers, grades the evidence, and weighs **several candidate pathways against each other** before writing a report in which every sentence is tied to a cited claim.
 
@@ -71,7 +71,7 @@ pip install -r requirements.txt
 **1. Try it offline (no keys, no network).** A synthetic scenario and a scripted model exercise the whole pipeline:
 
 ```bash
-python -m pytest -q tests          # 34 tests
+python -m pytest -q tests          # 54 tests
 streamlit run app.py               # choose "Offline demo" in the sidebar
 ```
 
@@ -180,6 +180,8 @@ All in `bmira/config.py`; the app exposes the round limit.
 **v2.2.1** registers B-MiRA's data types with LangGraph's checkpoint serializer, so runs keep working when newer LangGraph releases block unregistered types. Use v2.2.1 or later for live experiments.
 
 **v2.4.0** fixes problems seen in the first live run. Graph nodes are entities, with measurement, process and tissue words kept as qualifiers. Lists are split into one claim per entity, and placeholders are rejected. Ontology choice is species-aware. The mention check accepts abbreviations the paper defines and the previous sentence. Targeted searches return fewer hits, judged against their step, with a relevance cut-off. Entity resolution is batched, parallel and cached across runs, and classification tasks run on the cheap model.
+
+**v2.5.0** fixes problems seen in the third live run (pilot3, butyrate and Tregs). Pair comparison now matches verdicts by position, so conflicts can be found (0 of 227 pairs were judged before). Entity names are looked up before they become local ids, Greek letters and charges keep entities apart, and genotype notation stays whole. Method and comparator wording is recognised more widely, including trial wording, and a randomized trial with a control arm can grade strong. A finding on a subtype supports the link to its parent, and a null finding can contradict a required-for step. A decline or loss in the question ("NAD+ decline", "TET2 loss") is read as a decrease of the bare entity and the expected pathway sign follows it. Verification no longer flags cell names such as "induced regulatory T cells" or negated statements as overclaims. Session files hide the NCBI key and email and list every claim and step. Papers read per round: 10 to 20.
 
 **v2.3.0** makes live runs safe to pay for: preflight checks, fatal-error abort, partial summaries for runs that stop early, per-task reasoning effort, a soft token budget, cost estimates, reasoning-token counts, and provenance of uncommitted edits. Log lines from parallel steps no longer merge.
 
