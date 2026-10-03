@@ -623,6 +623,33 @@ def abbreviations(text: str) -> list[tuple[str, str]]:
     return out
 
 
+def long_form(abbr: str, before: str) -> str:
+    """The fewest words before '(ABBR)' whose letters spell ABBR in order, its first letter at
+    a word start (Schwartz & Hearst 2003): 'sodium butyrate (SB)', 'butyrate (Bu)'. '' if none."""
+    a, words = abbr.lower(), before.lower().split()
+    for n in range(1, min(len(words), len(a) + 2) + 1):
+        cand, i = " ".join(words[-n:]), len(" ".join(words[-n:])) - 1
+        for j in range(len(a) - 1, -1, -1):
+            if not a[j].isalnum():
+                continue
+            while i >= 0 and (cand[i] != a[j] or (j == 0 and i > 0 and cand[i - 1].isalnum())):
+                i -= 1
+            if i < 0:
+                break
+            i -= 1
+        else:
+            if any(len(w) >= 3 and w in a for w in cand.split()):   # 'itreg differentiation ... (iTreg)'
+                return ""
+            if cand.split()[0].startswith(a[0]):
+                return cand
+    return ""
+
+
+def expand_abbreviations(abbrevs) -> dict:
+    """abbreviation -> long form, for the abbreviations a paper defines."""
+    return {a: lf for a, before in abbrevs if (lf := long_form(a, before))}
+
+
 # ── claim-span consistency ──────────────────────────────────────────────────
 STOP = {"the", "and", "with", "cells", "cell", "human", "mouse", "mice", "levels", "level", "expression"}
 NULL_CUE = re.compile(r"\b(?:no|not|never|neither|nor|unchanged|unaffected|without|fail(?:ed|s)?|"

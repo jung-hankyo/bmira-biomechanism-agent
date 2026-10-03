@@ -888,6 +888,48 @@ def test_quote_check_reads_the_first_use_of_the_verb():
         == "quote negates the claimed effect"
 
 
+def test_paper_defined_abbreviations_name_the_long_form():
+    """Pilot5: 'SB' became LOCAL:sb in the paper that defines 'sodium butyrate (SB)'; live OLS
+    returns no exact match for SB or NaB."""
+    from bmira.normalize import abbreviations, check_claim, expand_abbreviations, long_form
+    text = ("Mice were treated with sodium butyrate (SB) or vehicle. Cells received butyrate (Bu) or acetate (Ac). "
+            "Short-chain fatty acids (SCFAs) were measured. Sodium butyrate (NaB) was also tested.")
+    full = expand_abbreviations(abbreviations(text))
+    assert full["sb"] == "sodium butyrate" and full["bu"] == "butyrate" and full["ac"] == "acetate"
+    assert full["scfas"] == "short-chain fatty acids"
+    assert "nab" not in full                                       # 'Na' is a symbol, not letters of a word
+    c = _claim("c", "p", "decreases")                              # the quote check still sees the abbreviation
+    c.subject, c.relation, c.object = "SB", "decreased", "intestinal permeability"
+    c.span = "SB decreased the intestinal permeability in TNBS-induced WT mice."
+    src = "Mice were treated with sodium butyrate (SB) or vehicle. " + c.span
+    assert check_claim(c, src, abbreviations(src))[0] == ""
+
+
+def test_long_form_replaces_an_abbreviation_only_when_it_resolves_to_nothing():
+    """Pilot5: SB stayed LOCAL:sb. GPR109A and iTreg already resolve and must not move; a
+    long form that is no better (the abbreviation's own definition garbled) is ignored."""
+    import bmira.normalize as nz
+    from bmira.graph import _long_forms, normalize
+    from bmira.schemas import Paper, ParsedQuestion
+    rt, _ = offline_runtime()
+    rt.resolver.settings.ontology_provider = "ols"
+    rt.resolver._ols = _onto({"sodium butyrate": ("CHEBI:64103", "sodium butyrate"),
+                              "gpr109a": ("PR:000001629", "hydroxycarboxylic acid receptor 2"),
+                              "butyrate": ("CHEBI:17968", "butyrate")})
+    rt.resolver.llm = None
+    abstract = "Mice received sodium butyrate (SB). GPR109A (also G protein-coupled receptor 109A) was measured."
+    paper = Paper(pmid="p", title="t", abstract=abstract, source_text=abstract)
+    sb = _claim("c1", "p", "increases"); sb.subject, sb.object, sb.span = "SB", "IL-10", "SB increased IL-10."
+    gp = _claim("c2", "p", "increases"); gp.subject, gp.object, gp.span = "GPR109A", "IL-10", "GPR109A rose."
+    forms = _long_forms({"papers": [paper]})
+    assert forms["p"]["sb"] == "sodium butyrate"
+    parsed = ParsedQuestion(population_model="m", exposure="butyrate", comparator="c", outcome="o",
+                            mechanism_hypothesis="h")
+    out = normalize({"claims": [sb, gp], "parsed": parsed, "papers": [paper]}, rt)["claims"]
+    assert out[0].subject_concept == "CHEBI:17968"                  # SB -> sodium butyrate -> butyrate (N1)
+    assert out[1].subject_concept == "PR:000001629" and out[1].subject_label == "hydroxycarboxylic acid receptor 2"
+
+
 def test_split_exposure_and_off_portfolio_support_are_signalled():
     """Pilot4's real failure left no signal: 25 claims on butyrate variants and Supported steps
     on no pathway, with fragmentation reading a healthy 0.32."""

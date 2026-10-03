@@ -21,7 +21,7 @@ from bmira.config import Settings
 from bmira.evidence import grade_claim, prose_sentences, verify_text
 from bmira.llm import PROMPTS
 from bmira.evidence import claim_study_type, verify_methods
-from bmira.normalize import (EntityResolver, abbreviations, check_claim, consolidate_aliases,
+from bmira.normalize import (EntityResolver, abbreviations, check_claim, consolidate_aliases, expand_abbreviations,
                              entity_change, entity_of, entity_parts, lexical_relation, lookup_key,
                              split_change, with_mark)
 from bmira.schemas import (Claim, ClaimList, Conflict, DIRECTION, EntailmentBatch, Hypothesis, LinkEvidence,
@@ -301,8 +301,24 @@ def _surfaces(c) -> tuple[str, str]:
     return (with_mark(c.subject, c.subject_attribute, c.span), with_mark(c.object, c.object_attribute, c.span))
 
 
-def _set_concepts(c, rt):
-    (se, sa, st), (oe, oa, ot) = (entity_of(x) for x in _surfaces(c))
+def _long_forms(state) -> dict:
+    """pmid -> {abbreviation: long form} from each paper's own definitions ('sodium butyrate (SB)')."""
+    return {p.pmid: expand_abbreviations(abbreviations(p.source_text or f"{p.title}. {p.abstract}"))
+            for p in (_as(Paper, x) for x in state.get("papers", []))}
+
+
+def _long(x, forms) -> str | None:
+    lf = forms.get(x.strip().lower())
+    return lf if lf and x.strip().lower() not in lf.split() else None
+
+
+def _set_concepts(c, rt, forms=None):
+    """`forms`: this paper's abbreviations. A long form replaces an abbreviation only when the
+    abbreviation resolved to nothing but a LOCAL id and the long form did better: pilot5 left 'SB' (sodium
+    butyrate) as LOCAL:sb, while 'GPR109A' and 'iTreg' already resolve and must not move."""
+    local = lambda x: rt.resolver.resolve(entity_of(x)[0]).id.startswith("LOCAL:")
+    pick = lambda x: lf if (lf := _long(x, forms or {})) and local(x) and not local(lf) else x
+    (se, sa, st), (oe, oa, ot) = (entity_of(pick(x)) for x in _surfaces(c))
     if c.subject_attribute == "none":
         c.subject_attribute = sa
     if c.object_attribute == "none":
@@ -341,16 +357,19 @@ def normalize(state, rt):
     for c in fresh:      # 'Tet2 loss increases IL-6' is 'Tet2 decreases IL-6' for the bare entity
         if c.relation_norm in DIRECTION and (entity_change(c.subject) == "down") != (entity_change(c.object) == "down"):
             c.relation_norm = "decreases" if c.relation_norm == "increases" else "increases"
+    forms = _long_forms(state)
     rt.resolver.resolve_many([entity_of(e)[0] for c in claims for e in _surfaces(c)]
+                             + [entity_of(lf)[0] for c in claims for e in _surfaces(c)
+                                if (lf := _long(e, forms.get(c.pmid, {})))]
                              + [c.context_cell_type for c in claims if c.context_cell_type])
     for c in claims:
-        _set_concepts(c, rt)
+        _set_concepts(c, rt, forms.get(c.pmid))
     nodes = [n for h in state.get("hypotheses", []) for k in _as(Hypothesis, h).links
              for n in (pf.split_key(k)[0], pf.split_key(k)[2])]          # pathway nodes join the merge
     merged = consolidate_aliases(claims, rt.resolver, rt.llm, rt.alias_verdicts, extra_ids=nodes)
     target = _as(ParsedQuestion, state["parsed"]).target_system
     for c in claims:
-        _set_concepts(c, rt)                               # cheap: cached + alias registry
+        _set_concepts(c, rt, forms.get(c.pmid))            # cheap: cached + alias registry
         grade_claim(c, target)
     rt.resolver.save()
     print(f"[normalize] {len(claims)} claims, {len(pending)} relations sent to LLM, "
