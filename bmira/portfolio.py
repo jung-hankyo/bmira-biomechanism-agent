@@ -14,6 +14,7 @@ from bmira.schemas import (ASSOCIATIVE_RELATIONS, DIRECTION, NULL_RELATIONS, REL
 
 QUALITY = {"ungraded": 0.0, "weak": 0.4, "moderate": 0.7, "strong": 1.0}
 SIGNED = {"increases": 1, "decreases": -1, "required_for": 1, "sufficient_for": 1}
+MODULATING = set(SIGNED)
 MOLECULAR = {"gene_or_protein", "chemical"}
 DOWNSTREAM_ONLY = {"phenotype", "disease"}
 LOGIC_PENALTY = {"disconnected": 0.5, "sign_mismatch": 0.5, "cycle": 0.7,
@@ -114,8 +115,11 @@ def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, e
     for key in keys:
         s, r, o = split_key(key)
         exact = by_pair.get((s, o), [])
+        if r == "binds":                        # 'HCAR2 binds butyrate' is 'butyrate binds HCAR2'
+            exact = exact + [c for c in by_pair.get((o, s), []) if c.relation_norm == "binds"]
         same_pair = exact + rolled.get((s, o), [])
-        support = [c for c in same_pair if c.relation_norm == r]
+        # a 'modulates' step is shown by any signed effect: 'butyrate increases DCs' modulates DCs
+        support = [c for c in same_pair if c.relation_norm == r or (r == "modulates" and c.relation_norm in MODULATING)]
         sup_ids = {c.id for c in support}
         corro = {c.id: c for c in same_pair if c.id not in sup_ids and _corroborates(r, c)}
         for c in support:                       # semantic partners judged to report the same finding

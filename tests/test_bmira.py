@@ -849,3 +849,20 @@ def test_local_cell_subtypes_inherit_the_cell_type_they_name():
               _claim("B", "p2", "increases", subj="CHEBI:17968", obj="CL:0000815")]
     ln = pf.build_links(claims, {}, {}, {}, Settings(), extra={link}, ancestors={sub.id: sub.ancestors})[link]
     assert ln.n_studies == 2                                              # the subtype finding counts (R9)
+
+
+def test_binding_has_no_direction_and_signed_effects_show_modulation():
+    """Pilot4: 'butyrate binds HCAR2' was split from 'HCAR2 binds butyrate' (the only moderate
+    paper), and 'butyrate modulates DCs' was 'not found' beside 'butyrate increases DCs'."""
+    binds = pf.link_key("B", "binds", "H")
+    claims = [_claim("A", "p1", "binds", subj="H", obj="B"), _claim("C", "p2", "binds", grade="weak", subj="B", obj="H")]
+    ln = pf.build_links(claims, {}, {}, {}, Settings(), extra={binds})[binds]
+    assert ln.status == "supported" and ln.n_studies == 2 and ln.grade == "moderate"
+    mod = pf.link_key("B", "modulates", "D")
+    claims = [_claim("E", "p3", "increases", subj="B", obj="D"), _claim("F", "p4", "decreases", subj="B", obj="D"),
+              _claim("G", "p5", "no_effect", grade="strong", subj="B", obj="D")]
+    ln = pf.build_links(claims[:2], {}, {}, {}, Settings(), extra={mod})[mod]
+    assert ln.status == "supported" and ln.n_studies == 2
+    assert pf.build_links(claims, {}, {}, {}, Settings(), extra={mod})[mod].n_contra_studies == 1   # a null still refutes
+    inc = pf.link_key("B", "increases", "D")
+    assert pf.build_links(claims[1:2], {}, {}, {}, Settings(), extra={inc})[inc].n_studies == 0     # no loosening here
