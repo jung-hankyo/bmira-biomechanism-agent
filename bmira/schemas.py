@@ -1,0 +1,245 @@
+"""Controlled vocabularies and the data passed between nodes."""
+from typing import Literal, Optional, get_args
+
+from pydantic import BaseModel, Field
+
+RELATIONS = Literal[
+    "increases", "decreases", "modulates", "no_effect",
+    "required_for", "sufficient_for",
+    "associated_with", "not_associated", "predicts",
+    "binds", "modifies",
+    "unresolved",                                   # sentinel: never biological evidence
+]
+RELATION_SET = set(get_args(RELATIONS))
+CAUSAL_RELATIONS = {"increases", "decreases", "modulates", "required_for", "sufficient_for"}
+ASSOCIATIVE_RELATIONS = {"associated_with", "not_associated", "predicts"}
+NULL_RELATIONS = {"no_effect", "not_associated"}
+PHYSICAL_RELATIONS = {"binds", "modifies"}
+DIRECTION = {"increases": "up", "decreases": "down"}
+
+CLAIM_TYPES = Literal["observation", "author_interpretation", "mechanistic_speculation"]
+PERTURBATIONS = Literal["none", "genetic_association", "pharmacological", "environmental",
+                        "knockdown", "knockout", "overexpression", "transfer"]
+STUDY_TYPES = Literal["meta_analysis", "human_rct", "human_cohort", "human_crosssectional",
+                      "human_primary", "organoid_ipsc", "animal", "cell_line",
+                      "computational_cohort", "in_silico", "review"]
+GRADES = Literal["ungraded", "weak", "moderate", "strong"]
+TIER = {"ungraded": 0, "weak": 1, "moderate": 2, "strong": 3}
+LABEL = {0: "ungraded", 1: "weak", 2: "moderate", 3: "strong"}
+
+
+# ── question and search ─────────────────────────────────────────────────────
+class ParsedQuestion(BaseModel):
+    population_model: str
+    exposure: str
+    comparator: str
+    outcome: str
+    mechanism_hypothesis: str
+    expected_direction: Literal["up", "down", "none", "unknown"] = Field(
+        "unknown", description="Direction the question asserts for exposure -> outcome")
+
+
+class SearchQuery(BaseModel):
+    query: str
+    intent: Literal["broad", "mechanism", "contradiction", "negative_result",
+                    "gap_positive", "gap_alternative_terms", "gap_null"]
+    target: str = Field("", description="Link id this query targets; empty in round 1")
+
+
+class QueryPlan(BaseModel):
+    queries: list[SearchQuery]
+
+
+class Paper(BaseModel):
+    pmid: str
+    title: str = ""
+    abstract: str = ""
+    journal: str = ""
+    year: str = ""
+    source_text: str = ""
+    text_access: Literal["full_text", "abstract_only"] = "abstract_only"
+    publication_types: list[str] = Field(default_factory=list)
+    pubtype_study_type: Optional[STUDY_TYPES] = None
+    retracted: bool = False
+    screen_status: Literal["unscreened", "included", "excluded"] = "unscreened"
+    relevance_score: int = 0
+    relevance_reason: str = ""
+    study_type: Optional[STUDY_TYPES] = None
+
+
+class Screen(BaseModel):
+    relevant: bool
+    reason: str
+    relevance_score: int = Field(50, ge=0, le=100)
+    study_type: STUDY_TYPES
+
+
+# ── claims ──────────────────────────────────────────────────────────────────
+class ExtractedClaim(BaseModel):
+    claim_type: CLAIM_TYPES
+    subject: str
+    relation: str = Field(description="Surface relation, verbatim wording")
+    object: str
+    context_model: str = ""
+    context_cell_type: str = ""
+    context_dose: str = ""
+    context_timepoint: str = ""
+    perturbation_class: PERTURBATIONS = "none"
+    rescue_arm: bool = False
+    orthogonal_validation: bool = False
+    comparator_present: bool = False
+    readout_is_inferred: bool = False
+    span: str = Field(description="Verbatim sentence from the text")
+
+
+class ClaimList(BaseModel):
+    claims: list[ExtractedClaim]
+
+
+class Claim(ExtractedClaim):
+    id: str
+    pmid: str
+    study_type: STUDY_TYPES
+    text_access: Literal["full_text", "abstract_only"]
+    anchored: bool = False
+    subject_concept: str = ""
+    object_concept: str = ""
+    subject_label: str = ""
+    object_label: str = ""
+    subject_category: str = "unknown"
+    object_category: str = "unknown"
+    object_ancestors: list[str] = Field(default_factory=list)
+    relation_raw: str = ""
+    relation_norm: str = ""                        # "" = pending, never sent twice once set
+    relation_source: str = ""
+    relation_confidence: float = 0.0
+    grade: GRADES = "ungraded"
+    grade_detail: dict = Field(default_factory=dict)
+
+    @property
+    def context(self) -> str:
+        return (self.context_cell_type or "unspecified").strip().lower()
+
+
+class RelationResolution(BaseModel):
+    claim_id: str
+    canonical_relation: RELATIONS
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class RelationResolutionBatch(BaseModel):
+    resolutions: list[RelationResolution]
+
+
+class EntityResolution(BaseModel):
+    normalized_label: str
+    category: str
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class AliasVerdict(BaseModel):
+    label_a: str
+    label_b: str
+    same_entity: bool
+
+
+class AliasBatch(BaseModel):
+    verdicts: list[AliasVerdict]
+
+
+# ── semantic layer and conflicts ────────────────────────────────────────────
+class PairAdjudication(BaseModel):
+    claim_a: str
+    claim_b: str
+    same_finding: bool = Field(description="Same exposure and materially the same measured endpoint")
+    same_context: bool = Field(description="Same or compatible model and cell type")
+    rationale: str = ""
+
+
+class PairBatch(BaseModel):
+    pairs: list[PairAdjudication]
+
+
+class Cluster(BaseModel):
+    key: str
+    claim_ids: list[str]
+    discordant: int = 0
+
+
+class Conflict(BaseModel):
+    cluster_key: str
+    verdict: Literal["true_conflict", "context_dependent", "not_comparable"]
+    explanation: str
+    discriminating_experiment: str = ""
+    claim_ids: list[str] = Field(default_factory=list, description="Leave empty; filled by code")
+
+
+class ConflictBatch(BaseModel):
+    conflicts: list[Conflict]
+
+
+# ── pathway portfolio ───────────────────────────────────────────────────────
+class ProposedLink(BaseModel):
+    source: str
+    relation: RELATIONS
+    target: str
+
+
+class ProposedPathway(BaseModel):
+    name: str
+    rationale: str = ""
+    links: list[ProposedLink]
+
+
+class PathwayProposal(BaseModel):
+    pathways: list[ProposedPathway]
+
+
+class LinkEvidence(BaseModel):
+    key: str                                       # "subject_id|relation|object_id"
+    subject: str
+    relation: str
+    object: str
+    subject_label: str = ""
+    object_label: str = ""
+    support_ids: list[str] = Field(default_factory=list)
+    corroborating_ids: list[str] = Field(default_factory=list)
+    contradicting_ids: list[str] = Field(default_factory=list)
+    context_dependent_ids: list[str] = Field(default_factory=list)   # opposing, but not counted
+    n_studies: int = 0                             # independent papers: support + corroboration
+    n_contra_studies: int = 0
+    grade: GRADES = "ungraded"                     # best supporting claim
+    contra_grade: GRADES = "ungraded"
+    contradiction_share: float = 0.0
+    completeness: float = 0.0
+    status: Literal["supported", "contradicted", "insufficient"] = "insufficient"
+    reason: str = "not found yet"
+    contexts: list[str] = Field(default_factory=list)
+    times_targeted: int = 0
+    zero_yield_count: int = 0
+    exhausted: bool = False
+
+
+class Hypothesis(BaseModel):
+    id: str
+    name: str
+    origin: Literal["llm_seed", "llm_expansion", "ledger_path", "user"]
+    links: list[str]                               # LinkEvidence keys, in order
+    rationale: str = ""
+    status: Literal["supported", "contradicted", "insufficient"] = "insufficient"
+    reason: str = ""
+    open: bool = True                              # still worth searching (internal)
+    score: float = 0.0
+    logic_factor: float = 1.0
+    logic_flags: list[str] = Field(default_factory=list)
+
+
+# ── verification ────────────────────────────────────────────────────────────
+class SentenceEntailment(BaseModel):
+    sentence_index: int
+    verdict: Literal["entailed", "partial", "unsupported"]
+    rationale: str = ""
+
+
+class EntailmentBatch(BaseModel):
+    judgements: list[SentenceEntailment]
