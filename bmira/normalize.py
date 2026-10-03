@@ -513,7 +513,7 @@ def split_location(surface: str) -> tuple[str, str]:
 
 # 'NAD+ decline', 'Tet2 loss', 'vitamin D deficiency': a decrease of the entity, not another entity.
 # Without this the exposure never meets the claims that name the bare 'NAD+' / 'Tet2'.
-CHANGE_DOWN = r"loss|deficiency|depletion|decline|knockout|deletion|knockdown"
+CHANGE_DOWN = r"loss|deficiency|depletion|decline|knockout|deletion|knockdown|inhibition|blockade"
 NOT_AN_ENTITY = {"bone", "weight", "hearing", "muscle", "hair", "fat", "vision", "memory", "tissue", "cell",
                  "cells", "body", "blood", "appetite", "neuron", "neuronal", "synapse", "skin", "lung"}
 
@@ -528,6 +528,14 @@ def split_change(surface: str) -> tuple[str, str]:
                 and m.group(1).split()[-1].lower() not in NOT_AN_ENTITY:
             return m.group(1), "down"
     return s, ""
+
+
+def with_mark(surface: str, attribute: str, span: str) -> str:
+    """A claim on 'Histone H3' typed as a modification and quoted as 'histone H3 acetylation' is
+    about the mark, as a pathway node of that name is; 'histone lactylation' stays a different node."""
+    m = attribute == "modification" and re.search(
+        rf"{re.escape(surface.strip())}\s+(\w+(?:ylation|itination))\b", span or "", flags=re.I)
+    return f"{surface.strip()} {m.group(1)}" if m else surface
 
 
 def entity_change(surface: str) -> str:

@@ -23,7 +23,7 @@ from bmira.llm import PROMPTS
 from bmira.evidence import claim_study_type, verify_methods
 from bmira.normalize import (EntityResolver, abbreviations, check_claim, consolidate_aliases,
                              entity_change, entity_of, entity_parts, lexical_relation, lookup_key,
-                             split_change)
+                             split_change, with_mark)
 from bmira.schemas import (Claim, ClaimList, Conflict, DIRECTION, EntailmentBatch, Hypothesis, LinkEvidence,
                            Paper, ParsedQuestion, PathwayProposal, QueryPlan,
                            RelationResolutionBatch, Screen, SearchQuery)
@@ -297,8 +297,12 @@ def extract(payload, rt):
             "papers": [paper.model_copy(update={"read_for": reads})]}
 
 
+def _surfaces(c) -> tuple[str, str]:
+    return (with_mark(c.subject, c.subject_attribute, c.span), with_mark(c.object, c.object_attribute, c.span))
+
+
 def _set_concepts(c, rt):
-    (se, sa, st), (oe, oa, ot) = entity_of(c.subject), entity_of(c.object)
+    (se, sa, st), (oe, oa, ot) = (entity_of(x) for x in _surfaces(c))
     if c.subject_attribute == "none":
         c.subject_attribute = sa
     if c.object_attribute == "none":
@@ -337,7 +341,7 @@ def normalize(state, rt):
     for c in fresh:      # 'Tet2 loss increases IL-6' is 'Tet2 decreases IL-6' for the bare entity
         if c.relation_norm in DIRECTION and (entity_change(c.subject) == "down") != (entity_change(c.object) == "down"):
             c.relation_norm = "decreases" if c.relation_norm == "increases" else "increases"
-    rt.resolver.resolve_many([e for c in claims for e in (entity_of(c.subject)[0], entity_of(c.object)[0])]
+    rt.resolver.resolve_many([entity_of(e)[0] for c in claims for e in _surfaces(c)]
                              + [c.context_cell_type for c in claims if c.context_cell_type])
     for c in claims:
         _set_concepts(c, rt)

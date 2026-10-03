@@ -8,7 +8,7 @@ import math
 from collections import defaultdict
 
 from bmira.evidence import SYSTEM_RANK, stance
-from bmira.normalize import entity_of
+from bmira.normalize import entity_change, entity_of
 from bmira.schemas import (ASSOCIATIVE_RELATIONS, DIRECTION, NULL_RELATIONS, RELATION_SET,
                            SYSTEM_GROUP, TIER, Hypothesis, LinkEvidence)
 
@@ -192,7 +192,10 @@ def proposal_keys(pathway, resolver) -> tuple[list[str], dict]:
         # same entity/attribute split as claims, or 'IFNG expression' would miss node 'IFNG'
         s, o = resolver.resolve(entity_of(ln.source)[0]), resolver.resolve(entity_of(ln.target)[0])
         labels[s.id], labels[o.id] = s.label, o.label
-        keys.append(link_key(s.id, ln.relation, o.id))
+        rel = ln.relation         # and the same restatement: 'HDAC inhibition increases X' = HDAC decreases X
+        if rel in DIRECTION and (entity_change(ln.source) == "down") != (entity_change(ln.target) == "down"):
+            rel = "decreases" if rel == "increases" else "increases"
+        keys.append(link_key(s.id, rel, o.id))
     return keys, labels
 
 

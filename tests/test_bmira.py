@@ -810,3 +810,25 @@ def test_ols_rejects_measurements_strains_and_bad_ids_and_prefers_labels(monkeyp
     assert r._ols("interleukin 18 measurement").id == "NCIT:C74814"   # asked for by name
     ols(("1318", "C3", [], "mondo"))
     assert r._ols("C3") is None
+
+
+def test_modifications_and_inhibition_name_the_bare_entity_in_claims_and_pathways():
+    from bmira.graph import _set_concepts
+    from bmira.normalize import entity_change, entity_of, with_mark
+    from bmira.schemas import ProposedLink, ProposedPathway
+    assert entity_of("HDAC inhibition")[0] == "HDAC" and entity_change("HDAC inhibition") == "down"
+    assert entity_of("inhibition of HDAC")[0] == "HDAC"
+    assert entity_of("histone deacetylase")[0] == "histone deacetylase"
+    span = "Butyrate enhanced histone H3 acetylation in the promoter of Foxp3."
+    assert with_mark("Histone H3", "modification", span) == "Histone H3 acetylation"
+    assert with_mark("Histone H3", "amount", span) == "Histone H3"
+    rt, _ = offline_runtime()
+    c = _claim("c", "p", "increases", object_attribute="modification")
+    c.subject, c.object, c.span = "butyrate", "Histone H3", span
+    _set_concepts(c, rt)
+    r = rt.resolver
+    assert c.object_concept == r.resolve("Histone H3 acetylation").id != r.resolve("histone lactylation").id
+    pw = ProposedPathway(name="p", links=[ProposedLink(source="HDAC inhibition", relation="increases",
+                                                       target="Histone H3 acetylation")])
+    keys, _ = pf.proposal_keys(pw, r)                                  # the pathway names the same node
+    assert keys == [pf.link_key(r.resolve("HDAC").id, "decreases", c.object_concept)]
