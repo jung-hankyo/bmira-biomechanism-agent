@@ -784,3 +784,29 @@ def test_salt_acid_and_given_forms_name_the_parent_chemical():
     r = nz.EntityResolver(Settings(ontology_provider="ols"))
     r._ols = _onto({"nab": ("CHEBI:64103", "sodium butyrate"), "butyrate": ("CHEBI:17968", "butyrate")})
     assert {r.resolve(x).id for x in ("NaB", "sodium butyrate", "butyric acid", "butyrate")} == {"CHEBI:17968"}
+
+
+def test_ols_rejects_measurements_strains_and_bad_ids_and_prefers_labels(monkeypatch):
+    """Real OLS answers from pilot4's names."""
+    import bmira.normalize as nz
+
+    def ols(*docs):
+        class R:
+            def json(self):
+                return {"response": {"docs": [{"obo_id": i, "label": lab, "synonym": syn, "ontology_name": o,
+                                               "iri": ""} for i, lab, syn, o in docs]}}
+        monkeypatch.setattr(nz.requests, "get", lambda *a, **k: R())
+    r = nz.EntityResolver(Settings(ontology_provider="ols"))
+    ols(("CHEBI:17154", "nicotinamide", ["niacin"], "chebi"), ("CHEBI:15940", "nicotinic acid", ["Niacin"], "chebi"),
+        ("NCIT:C689", "Niacin", [], "ncit"))
+    assert r._ols("niacin").id == "NCIT:C689"                     # was nicotinamide
+    ols(("PR:O13754", "Hsp70/Hsp90 co-chaperone cns1 (Schizosaccharomyces pombe 972h-)", ["CNS1"], "pr"))
+    assert r._ols("CNS1") is None                                  # the Foxp3 enhancer is not a yeast protein
+    ols(("NCIT:C166072", "Forkhead Box Protein P3 Measurement", ["forkhead box p3"], "ncit"))
+    assert r._ols("forkhead box p3") is None
+    ols(("NCIT:C74814", "Interleukin 18 Measurement", ["interleukin 18"], "ncit"),
+        ("NCIT:C20520", "Interleukin-18", [], "ncit"))
+    assert r._ols("interleukin 18").id == "NCIT:C20520"
+    assert r._ols("interleukin 18 measurement").id == "NCIT:C74814"   # asked for by name
+    ols(("1318", "C3", [], "mondo"))
+    assert r._ols("C3") is None

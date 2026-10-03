@@ -89,7 +89,8 @@ class EntityResolver:
     def _path(self):
         d = self.settings.cache_dir
         # v2: v1 files hold split LOCAL ids for LLM-normalized labels ('Treg cell' vs 'Treg')
-        # v3: v2 files hold salts as their own chemical ('NaB' -> sodium butyrate)
+        # v3: v2 files hold salts as their own chemical ('NaB' -> sodium butyrate) and NCIT
+        #     measurement terms ('forkhead box p3' -> 'Forkhead Box Protein P3 Measurement')
         return Path(d) / f"entities_v3_{self.settings.ontology_provider}.json" if d else None
 
     def _load(self) -> dict:
@@ -224,7 +225,8 @@ class EntityResolver:
 
     def _ols(self, name: str) -> Concept | None:
         """Accept an OLS hit only on an exact label or synonym match; a search rank is not a fact.
-        Among exact matches, the preferred ontology wins."""
+        Among exact matches a label beats a synonym ('niacin' is a synonym of both nicotinamide
+        and nicotinic acid, but the label of NCIT Niacin), then the preferred ontology wins."""
         t = self.settings.ontology_timeout_s
         try:
             docs = requests.get(f"{OLS}/search", timeout=t, params={
@@ -233,17 +235,15 @@ class EntityResolver:
         except Exception:
             return None
         want = lookup_key(name)
-        exact = [d for d in docs if d.get("obo_id") and want in
+        exact = [d for d in docs if ":" in (d.get("obo_id") or "") and want in       # MONDO also returns ids like '1318'
                  {lookup_key(n) for n in [d.get("label", "")] + list(d.get("synonym") or [])}]
-        if not exact:
-            return None
-        exact = [d for d in exact if _species(d.get("label", "")) != "other"]
-        if "allele" not in name.lower():               # NCIT 'HDAC9 wt Allele' is not the enzyme family
-            exact = [d for d in exact if not re.search(r"\ballele\b", d.get("label", ""), re.I)]
+        exact = [d for d in exact if _species(d.get("label", "")) != "other" and not any(
+            w not in name.lower() and re.search(rf"\b{w}\b", d.get("label", ""), re.I) for w in QUALIFIED)]
         if not exact:                                  # e.g. only 'interleukin-10 (chicken)'
             return None
         onto = lambda d: ONTOLOGIES.index(d["ontology_name"]) if d.get("ontology_name") in ONTOLOGIES else 99
-        d = min(exact, key=lambda d: (SPECIES_RANK[_species(d.get("label", ""))], onto(d)))
+        d = min(exact, key=lambda d: (lookup_key(d.get("label", "")) != want,
+                                      SPECIES_RANK[_species(d.get("label", ""))], onto(d)))
         parents, ancestors = self._hierarchy(d.get("ontology_name", ""), d.get("iri", ""))
         return Concept(d["obo_id"], d.get("label", name),
                        PREFIX_CATEGORY.get(d["obo_id"].split(":")[0].upper(), "unknown"), "ols", 0.9,
@@ -267,6 +267,9 @@ class EntityResolver:
 
 
 SPECIES_RANK = {"agnostic": 0, "human": 1, "mouse": 2, "rat": 3, "other": 9}
+# NCIT terms ABOUT an entity, not the entity: 'HDAC9 wt Allele' for 'HDAC', 'Forkhead Box
+# Protein P3 Measurement' for 'forkhead box p3'. Kept only when the name asks for one.
+QUALIFIED = ("allele", "measurement")
 
 
 def _species(label: str) -> str:
@@ -280,7 +283,8 @@ def _species(label: str) -> str:
                         ("rat", ("rat", "rattus norvegicus"))):
         if tag in words:
             return name
-    return "other" if re.fullmatch(r"[a-z .]+", tag) else "agnostic"
+    # 'chicken', 'yeast', and binomials with a strain: 'Schizosaccharomyces pombe 972h-'
+    return "other" if re.fullmatch(r"[a-z .]+", tag) or re.match(r"[a-z]+\.? [a-z]+\b", tag) else "agnostic"
 
 
 # ── alias consolidation ─────────────────────────────────────────────────────
