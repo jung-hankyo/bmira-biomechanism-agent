@@ -270,3 +270,123 @@ def test_temperature_is_not_sent_by_default(monkeypatch):
     assert "temperature" not in seen[-1]
     LangChainLLM(Settings(temperature=0.0), api_key="k")._model("cheap")
     assert seen[-1]["temperature"] == 0.0
+
+
+
+# H1-H3: failure-safe telemetry, fatal errors, preflight, budget, effort and cost.
+def _failing_runtime(monkeypatch, task, exc, on_call=1):
+    """Offline runtime whose surrogate raises `exc` on the n-th call of `task`."""
+    import bmira.offline as off
+    real, seen = off.offline_runtime, {"n": 0}          # shared: the failure happens once per test
+
+    def patched(**kw):
+        rt, sc = real(**kw)
+        original = rt.llm.structured
+
+        def structured(t, *args, **kwargs):
+            if t == task:
+                seen["n"] += 1
+                if seen["n"] == on_call:
+                    raise exc
+            return original(t, *args, **kwargs)
+        rt.llm.structured = structured
+        return rt, sc
+    monkeypatch.setattr(off, "offline_runtime", patched)
+
+
+def test_fatal_error_aborts_session_but_keeps_partial_run(tmp_path, monkeypatch):
+    import json
+    from bmira.experiments import main
+    from bmira.llm import FatalLLMError
+    _failing_runtime(monkeypatch, "plan", FatalLLMError("plan: insufficient_quota"), on_call=2)
+    qs = tmp_path / "q.txt"
+    qs.write_text("one\ntwo\n", encoding="utf-8")
+    out = main(["--offline", "--quiet", "--questions", str(qs), "--out", str(tmp_path / "s.json")])
+    session = json.loads(out.read_text(encoding="utf-8"))
+    assert len(session["runs"]) == 1 and "fatal" in session["session"]["aborted"]
+    run = session["runs"][0]
+    assert run["status"] == "aborted" and run["failed_node"] == "plan"
+    assert run["papers"]["retrieved"] > 0 and run["extraction"]["claims_kept"] > 0   # round 1 kept
+    assert run["llm"]["total_tokens_in"] > 0 and "run did not finish" in [x["signal"] for x in run["signals"]]
+
+
+def test_nonfatal_error_fails_one_run_only(tmp_path, monkeypatch):
+    import json
+    from bmira.experiments import main
+    _failing_runtime(monkeypatch, "seed", RuntimeError("boom"), on_call=1)
+    qs = tmp_path / "q.txt"
+    qs.write_text("one\ntwo\n", encoding="utf-8")
+    session = json.loads(main(["--offline", "--quiet", "--questions", str(qs), "--out",
+                               str(tmp_path / "s.json")]).read_text(encoding="utf-8"))
+    assert len(session["runs"]) == 2 and "aborted" not in session["session"]   # seeding degrades, run completes
+
+
+
+def test_uncaught_nonfatal_error_fails_run_and_session_continues(tmp_path, monkeypatch):
+    import json
+    from bmira.experiments import main
+    _failing_runtime(monkeypatch, "plan", RuntimeError("upstream hiccup"), on_call=2)
+    qs = tmp_path / "q.txt"
+    qs.write_text("one\ntwo\n", encoding="utf-8")
+    session = json.loads(main(["--offline", "--quiet", "--questions", str(qs), "--out",
+                               str(tmp_path / "s.json")]).read_text(encoding="utf-8"))
+    first, second = session["runs"]
+    assert first["status"] == "failed" and first["failed_node"] == "plan" and first["papers"]["retrieved"] > 0
+    assert second["status"] == "completed"
+
+
+def test_error_classification():
+    from bmira.llm import is_fatal
+
+    class E(Exception):
+        status_code = None
+    assert is_fatal(E("Error code: 429 - insufficient_quota credit_balance_exhausted"))
+    assert is_fatal(E("Unsupported value: 'temperature' ... unsupported_value"))
+    assert is_fatal(E("model_not_found"))
+    assert not is_fatal(E("Error code: 429 - slow_down"))
+    assert not is_fatal(E("Error code: 503 - server_is_overloaded"))
+
+
+def test_preflight_blocks_spending(tmp_path, monkeypatch):
+    import json
+    from bmira.experiments import main
+    from bmira.llm import FatalLLMError
+    qs = tmp_path / "q.txt"
+    qs.write_text("one\n", encoding="utf-8")
+    ok = json.loads(main(["--offline", "--quiet", "--questions", str(qs), "--out",
+                          str(tmp_path / "a.json")]).read_text(encoding="utf-8"))
+    assert all(c["ok"] for c in ok["session"]["preflight"]) and len(ok["runs"]) == 1
+    _failing_runtime(monkeypatch, "preflight", FatalLLMError("preflight: invalid_api_key"))
+    bad = json.loads(main(["--offline", "--quiet", "--questions", str(qs), "--out",
+                           str(tmp_path / "b.json")]).read_text(encoding="utf-8"))
+    assert bad["runs"] == [] and "preflight failed" in bad["session"]["aborted"]
+
+
+def test_budget_stops_search_and_still_reports():
+    from bmira.telemetry import execute, summarize
+    rt, sc = offline_runtime(budget_tokens=1)
+    final, info = execute(sc["question"], rt, echo=False)
+    m = summarize(final, rt, info)
+    assert final["gate"] == "BUDGET" and final["round_idx"] == 1 and final["report"]
+    assert m["run"]["stop_reason"] == "token budget reached" and any("budget" in w for w in final["warnings"])
+
+
+def test_effort_retries_and_cost():
+    import sys
+    import types
+    from bmira.llm import LangChainLLM
+    from bmira.telemetry import estimate_cost
+    seen = []
+    fake = types.ModuleType("langchain_openai")
+    fake.ChatOpenAI = lambda **kw: seen.append(kw) or object()
+    sys.modules["langchain_openai"] = fake
+    try:
+        llm = LangChainLLM(Settings(), api_key="k")
+        llm._for("screen", "cheap")
+        assert seen[-1]["reasoning_effort"] == "low" and seen[-1]["max_retries"] == 6
+        llm._for("extract", "reasoning")
+        assert seen[-1]["reasoning_effort"] == "medium" and llm.model_of["extract"] == Settings().models["openai"]["reasoning"]
+    finally:
+        del sys.modules["langchain_openai"]
+    assert estimate_cost("gpt-6-sol", 1_000_000, 100_000, Settings().prices) == 3.0
+    assert estimate_cost("unknown-model", 10, 10, Settings().prices) is None

@@ -41,3 +41,26 @@ class Settings:
     # Sampling temperature. None = the model's default, which every model accepts; some
     # reasoning models reject any other value. Set a number only if your model allows it.
     temperature: float | None = None
+    # LLM calls: transient errors (rate limits, overload, timeouts) are retried with
+    # backoff that honours Retry-After; fatal ones (empty balance, bad key, unknown model,
+    # unsupported parameter) stop the run at once and the session is aborted.
+    llm_max_retries: int = 6
+    llm_timeout_s: float = 180.0
+    # Reasoning effort per task for OpenAI reasoning models (ignored for Anthropic).
+    # A task missing here, or None, uses the model's default effort. Classification tasks
+    # run low; tasks that read papers or write the report run medium.
+    reasoning_effort: dict = field(default_factory=lambda: {
+        "screen": "low", "entity": "low", "relation": "low", "alias": "low", "pair": "low",
+        "conflict": "low", "entailment": "low", "chat": "low", "preflight": "low",
+        "parse": "medium", "plan": "medium", "extract": "medium", "seed": "medium",
+        "expand": "medium", "synthesize": "medium"})
+    # Soft token budget per run (input + output over all tasks), checked between rounds:
+    # when reached, searching stops and the report is written from what was found.
+    # None = no cap. Also set a hard spend limit at the provider as the real backstop.
+    budget_tokens: int | None = None
+    # USD per 1M tokens (input, output), for cost estimates in telemetry only. Edit to your
+    # provider's current prices; a model missing here shows no estimate. OpenAI figures:
+    # official changelog; Anthropic figures: published list prices (both checked 2026-10-03).
+    prices: dict = field(default_factory=lambda: {
+        "gpt-6-sol": (2.0, 10.0), "gpt-6.1-sol": (2.0, 10.0), "gpt-6-luna": (0.10, 0.50),
+        "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-4-5-20251001": (1.0, 5.0)})

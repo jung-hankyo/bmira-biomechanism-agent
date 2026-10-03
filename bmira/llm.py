@@ -5,6 +5,7 @@ and an offline surrogate (bmira.offline.SurrogateLLM) can stand in for the real 
 surrogate reads it instead of parsing prompt text.
 """
 import os
+import re
 import time
 from collections import Counter
 from functools import lru_cache
@@ -109,8 +110,29 @@ PROMPTS = {
 }
 
 
+class FatalLLMError(BaseException):
+    """Unrecoverable provider error: empty balance, bad key, unknown model, unsupported parameter.
+
+    Derives from BaseException on purpose. Pipeline nodes catch Exception to degrade
+    gracefully (a failed batch is retried next round); an empty balance must not be
+    degraded around, it must stop the run at once.
+    """
+
+
+FATAL = re.compile(r"insufficient_quota|credit_balance|credit balance|billing|invalid_api_key|"
+                   r"incorrect api key|authentication|permission_error|model_not_found|"
+                   r"not_found_error|does not exist|unsupported_value|unsupported_parameter|"
+                   r"unrecognized request argument", re.I)
+
+
+def is_fatal(e: BaseException) -> bool:
+    return getattr(e, "status_code", None) in (401, 403, 404) or bool(FATAL.search(str(e)))
+
+
 class LangChainLLM:
-    """Counts calls, items, tokens, seconds and failures per task (read by bmira.telemetry)."""
+    """Counts calls, items, tokens (incl. reasoning), seconds and failures per task, and
+    the model each task used (read by bmira.telemetry). Transient errors are retried by
+    the client with backoff (honouring Retry-After); fatal errors raise FatalLLMError."""
 
     def __init__(self, settings, api_key: str | None = None):
         self.settings = settings
@@ -119,16 +141,26 @@ class LangChainLLM:
             raise RuntimeError(f"{settings.provider} API key missing; no silent provider switch.")
         self.calls, self.items, self.failures = Counter(), Counter(), Counter()
         self.tokens_in, self.tokens_out, self.seconds = Counter(), Counter(), Counter()
+        self.tokens_reasoning, self.model_of = Counter(), {}
 
-    @lru_cache(maxsize=4)
-    def _model(self, role: str):
-        name = self.settings.models[self.settings.provider][role]
-        extra = {} if self.settings.temperature is None else {"temperature": self.settings.temperature}
-        if self.settings.provider == "openai":
+    @lru_cache(maxsize=16)
+    def _model(self, role: str, effort: str | None = None):
+        s = self.settings
+        kw = {"model": s.models[s.provider][role], "api_key": self.api_key,
+              "max_retries": s.llm_max_retries, "timeout": s.llm_timeout_s}
+        if s.temperature is not None:
+            kw["temperature"] = s.temperature
+        if s.provider == "openai":
             from langchain_openai import ChatOpenAI
-            return ChatOpenAI(model=name, api_key=self.api_key, **extra)
-        from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(model=name, api_key=self.api_key, **extra)
+            if effort:
+                kw["reasoning_effort"] = effort
+            return ChatOpenAI(**kw)
+        from langchain_anthropic import ChatAnthropic   # effort is an OpenAI setting
+        return ChatAnthropic(**kw)
+
+    def _for(self, task, role):
+        self.model_of[task] = self.settings.models[self.settings.provider][role]
+        return self._model(role, self.settings.reasoning_effort.get(task))
 
     def _run(self, task, n_items, fn):
         self.calls[task] += 1
@@ -136,8 +168,10 @@ class LangChainLLM:
         t0 = time.perf_counter()
         try:
             return fn()
-        except Exception:
+        except Exception as e:
             self.failures[task] += 1
+            if is_fatal(e):
+                raise FatalLLMError(f"{task}: {type(e).__name__}: {e}") from e
             raise
         finally:
             self.seconds[task] += time.perf_counter() - t0
@@ -146,6 +180,7 @@ class LangChainLLM:
         u = getattr(msg, "usage_metadata", None) or {}
         self.tokens_in[task] += u.get("input_tokens", 0) or 0
         self.tokens_out[task] += u.get("output_tokens", 0) or 0
+        self.tokens_reasoning[task] += (u.get("output_token_details") or {}).get("reasoning", 0) or 0
 
     def _parsed(self, task, res):
         self._usage(task, res.get("raw"))
@@ -155,18 +190,19 @@ class LangChainLLM:
         return res["parsed"]
 
     def structured(self, task, schema, system, user, role="reasoning", ctx=None, n_items=1):
-        model = self._model(role).with_structured_output(schema, include_raw=True)
+        model = self._for(task, role).with_structured_output(schema, include_raw=True)
         res = self._run(task, n_items, lambda: model.invoke([("system", system), ("human", user)]))
         return self._parsed(task, res)
 
     def structured_many(self, task, schema, system, users, role="cheap", ctxs=None):
-        model = self._model(role).with_structured_output(schema, include_raw=True)
+        model = self._for(task, role).with_structured_output(schema, include_raw=True)
         res = self._run(task, len(users), lambda: model.batch(
             [[("system", system), ("human", u)] for u in users], config={"max_concurrency": 8}))
         return [self._parsed(task, r) for r in res]
 
     def text(self, task, system, user, role="reasoning", ctx=None):
-        msg = self._run(task, 1, lambda: self._model(role).invoke([("system", system), ("human", user)]))
+        model = self._for(task, role)
+        msg = self._run(task, 1, lambda: model.invoke([("system", system), ("human", user)]))
         self._usage(task, msg)
         return msg.content if isinstance(msg.content, str) else "".join(
             b.get("text", "") for b in msg.content if isinstance(b, dict))

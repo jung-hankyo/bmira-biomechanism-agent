@@ -70,21 +70,31 @@ class SurrogateLLM:
         self.s = scenario
         self.calls, self.items, self.failures = Counter(), Counter(), Counter()
         self.tokens_in, self.tokens_out, self.seconds = Counter(), Counter(), Counter()
+        self.tokens_reasoning, self.model_of = Counter(), {}
         self.alias_groups = [{lookup_key(x) for x in g} for g in scenario["alias_groups"]]
+
+    def _count(self, task, prompt_chars, n_out):
+        """Approximate tokens (4 characters each) so budgets and costs work offline."""
+        self.model_of[task] = "surrogate"
+        self.tokens_in[task] += prompt_chars // 4
+        self.tokens_out[task] += 60 * n_out
 
     def structured_many(self, task, schema, system, users, role="cheap", ctxs=None):
         self.calls[task] += 1
         self.items[task] += len(users)
+        self._count(task, sum(len(system) + len(u) for u in users), len(users))
         return [self._screen(p) for p in ctxs]
 
     def structured(self, task, schema, system, user, role="reasoning", ctx=None, n_items=1):
         self.calls[task] += 1
         self.items[task] += n_items
+        self._count(task, len(system) + len(user), n_items)
         return getattr(self, f"_{task}")(ctx or {})
 
     def text(self, task, system, user, role="reasoning", ctx=None):
         self.calls[task] += 1
         self.items[task] += 1
+        self._count(task, len(system) + len(user), 1)
         return getattr(self, f"_{task}")(ctx)
 
     # ── scripted behaviours ──
@@ -153,6 +163,9 @@ class SurrogateLLM:
             if any(lookup_key(l["target"]) in novel or lookup_key(l["source"]) in novel for l in pw["links"]):
                 return PathwayProposal(pathways=[pw])
         return PathwayProposal(pathways=[])
+
+    def _preflight(self, ctx):
+        return ctx["schema"](ok=True)
 
     def _entailment(self, ctx):
         return EntailmentBatch(judgements=[])

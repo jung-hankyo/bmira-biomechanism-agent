@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 from collections import Counter
 from dataclasses import asdict
@@ -19,7 +20,10 @@ from pathlib import Path
 from statistics import mean
 
 from bmira import __version__
+from pydantic import BaseModel
+
 from bmira.graph import build_agent
+from bmira.llm import FatalLLMError
 from bmira.portfolio import STATUS_LABEL, STOP_LABEL
 
 
@@ -31,13 +35,31 @@ class _Tee(io.TextIOBase):
         self.lines, self._lock, self._buf = [], threading.Lock(), ""
 
     def write(self, s):
-        with self._lock:
-            if self.echo:
-                self.out.write(s)
+        with self._lock:                       # whole lines only: parallel prints stay apart
             self._buf += s
             *done, self._buf = self._buf.split("\n")
-            self.lines += [d for d in done if d.strip()]
+            for d in done:
+                if self.echo:
+                    self.out.write(d + "\n")
+                if d.strip():
+                    self.lines.append(d)
         return len(s)
+
+
+NODES = {"parse", "plan", "search", "screen", "extract", "normalize", "semantic", "portfolio",
+         "review", "synthesize", "verify"}
+
+
+def _failing_node(e: BaseException) -> str | None:
+    """Deepest pipeline node in the traceback; LangGraph's own note is missing for some errors."""
+    node = None
+    for frame, _ in traceback.walk_tb(e.__traceback__):
+        if frame.f_code.co_filename.endswith("graph.py") and frame.f_code.co_name in NODES:
+            node = frame.f_code.co_name
+    if node is None:
+        hit = re.search(r"task with name '([^']+)'", " ".join(getattr(e, "__notes__", [])))
+        node = hit.group(1) if hit else None
+    return node
 
 
 def execute(question: str, rt, on_progress=None, echo: bool = True):
@@ -48,20 +70,29 @@ def execute(question: str, rt, on_progress=None, echo: bool = True):
     log, shown = _Tee(echo), 0
     node_seconds, t0 = Counter(), time.perf_counter()
     last = t0
+    info = {"question": question, "status": "completed", "error": None, "failed_node": None, "fatal": False}
     with contextlib.redirect_stdout(log):
-        for update in agent.stream({"question": question}, cfg, stream_mode="updates"):
-            now = time.perf_counter()
-            nodes = [n for n in update if not n.startswith("__")]
-            for n in nodes:                    # parallel extractions share the elapsed time
-                node_seconds[n] += (now - last) / max(1, len(nodes))
-            last = now
-            if on_progress:
-                on_progress(nodes, log.lines[shown:])
-                shown = len(log.lines)
-    return agent.get_state(cfg).values, {
-        "wall_seconds": round(time.perf_counter() - t0, 1),
-        "node_seconds": {k: round(v, 1) for k, v in node_seconds.most_common()},
-        "log": log.lines}
+        try:
+            for update in agent.stream({"question": question}, cfg, stream_mode="updates"):
+                now = time.perf_counter()
+                nodes = [n for n in update if not n.startswith("__")]
+                for n in nodes:                # parallel extractions share the elapsed time
+                    node_seconds[n] += (now - last) / max(1, len(nodes))
+                last = now
+                if on_progress:
+                    on_progress(nodes, log.lines[shown:])
+                    shown = len(log.lines)
+        except (Exception, FatalLLMError, KeyboardInterrupt) as e:
+            # Keep what was paid for: the last saved graph state still holds every
+            # completed step. Fatal errors and Ctrl-C abort the session; others fail one run.
+            fatal = isinstance(e, (FatalLLMError, KeyboardInterrupt))
+            info.update(status="aborted" if fatal else "failed", fatal=fatal,
+                        error=f"{type(e).__name__}: {e}"[:2000], failed_node=_failing_node(e),
+                        traceback=traceback.format_exc()[-4000:])
+            print(f"[run] {info['status'].upper()} at step {info['failed_node']}: {info['error'][:300]}")
+    info.update(wall_seconds=round(time.perf_counter() - t0, 1), log=log.lines,
+                node_seconds={k: round(v, 1) for k, v in node_seconds.most_common()})
+    return agent.get_state(cfg).values, info
 
 
 # ── summary ─────────────────────────────────────────────────────────────────
@@ -73,12 +104,27 @@ def _share(a, b) -> float | None:
     return round(a / b, 3) if b else None
 
 
-def git_commit() -> str:
+def _git(*args) -> str:
     try:
-        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, encoding="utf-8",
-                              cwd=Path(__file__).parent, timeout=5).stdout.strip() or "unknown"
+        return subprocess.run(["git", *args], capture_output=True, text=True, encoding="utf-8",
+                              cwd=Path(__file__).parent, timeout=5).stdout
     except Exception:
-        return "unknown"
+        return ""
+
+
+def git_commit() -> str:
+    return _git("rev-parse", "--short", "HEAD").strip() or "unknown"
+
+
+def git_state() -> dict:
+    """Commit plus local edits: a run from hand-edited code must not look like a release."""
+    changed = [ln[3:] for ln in _git("status", "--porcelain", "--untracked-files=no").splitlines() if ln.strip()]
+    return {"commit": git_commit(), "uncommitted_changes": bool(changed), "changed_files": changed}
+
+
+def estimate_cost(model, tokens_in, tokens_out, prices) -> float | None:
+    p = prices.get(model)
+    return round((tokens_in * p[0] + tokens_out * p[1]) / 1e6, 4) if p else None
 
 
 def summarize(final: dict, rt, run: dict) -> dict:
@@ -97,9 +143,22 @@ def summarize(final: dict, rt, run: dict) -> dict:
     pairs = list(rt.pair_cache.values())
     n_extracted = len(claims) + len(dropped)
 
+    zero = Counter()
+    per_task = {}
+    for t in tasks:
+        model = getattr(llm, "model_of", {}).get(t)
+        t_in, t_out = getattr(llm, "tokens_in", zero)[t], getattr(llm, "tokens_out", zero)[t]
+        per_task[t] = {"model": model, "calls": llm.calls[t], "items": llm.items[t],
+                       "failures": getattr(llm, "failures", zero)[t], "tokens_in": t_in, "tokens_out": t_out,
+                       "tokens_reasoning": getattr(llm, "tokens_reasoning", zero)[t],
+                       "seconds": round(getattr(llm, "seconds", zero)[t], 1),
+                       "est_cost_usd": estimate_cost(model, t_in, t_out, s.prices)}
+    costs = [v["est_cost_usd"] for v in per_task.values()]
     summary = {
+        "status": run.get("status", "completed"), "error": run.get("error"), "failed_node": run.get("failed_node"),
         "run": {
-            "question": final.get("question"), "bmira_version": __version__, "git_commit": git_commit(),
+            "question": final.get("question") or run.get("question"), "bmira_version": __version__,
+            "git_commit": git_commit(),
             "wall_seconds": run["wall_seconds"], "node_seconds": run["node_seconds"],
             "rounds": final.get("round_idx"), "stop_reason": STOP_LABEL.get(final.get("gate"), final.get("gate")),
             "provider": s.provider, "models": s.models.get(s.provider),
@@ -107,14 +166,14 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "literature_source": getattr(rt.source, "name", "?"), "settings": asdict(s)},
         "parsed_question": final["parsed"].model_dump() if final.get("parsed") else None,
         "llm": {
-            "per_task": {t: {"calls": llm.calls[t], "items": llm.items[t],
-                             "failures": getattr(llm, "failures", Counter())[t],
-                             "tokens_in": getattr(llm, "tokens_in", Counter())[t],
-                             "tokens_out": getattr(llm, "tokens_out", Counter())[t],
-                             "seconds": round(getattr(llm, "seconds", Counter())[t], 1)} for t in tasks},
-            "total_tokens_in": sum(getattr(llm, "tokens_in", Counter()).values()),
-            "total_tokens_out": sum(getattr(llm, "tokens_out", Counter()).values()),
-            "total_failures": sum(getattr(llm, "failures", Counter()).values())},
+            "per_task": per_task,
+            "total_tokens_in": sum(v["tokens_in"] for v in per_task.values()),
+            "total_tokens_out": sum(v["tokens_out"] for v in per_task.values()),
+            "total_tokens_reasoning": sum(v["tokens_reasoning"] for v in per_task.values()),
+            "total_failures": sum(v["failures"] for v in per_task.values()),
+            "est_cost_usd": round(sum(c for c in costs if c is not None), 4) if any(c is not None for c in costs) else None,
+            "cost_complete": all(c is not None for c in costs),
+            "budget_tokens": s.budget_tokens},
         "retrieval": {
             "queries": len(qlog), "queries_failed": sum(not q["ok"] for q in qlog),
             "queries_zero_hits": sum(q["ok"] and q.get("hits", 0) == 0 for q in qlog),
@@ -189,11 +248,46 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "overclaim_samples": [o["sentence"][:200] for o in verif.get("overclaims", [])][:5]},
         "warnings": final.get("warnings", []),
         "log": {"problems": [ln for ln in run["log"] if re.search(r"fail|WARN|error", ln, re.I)][:30],
-                "tail": run["log"][-40:]},
+                "tail": run["log"][-40:], "traceback": run.get("traceback")},
         "report": final.get("report", ""),
     }
     summary["signals"] = signals(summary)
     return summary
+
+
+# ── preflight ───────────────────────────────────────────────────────────────
+class Ping(BaseModel):
+    ok: bool
+
+
+def preflight(rt) -> list[dict]:
+    """Seconds-long checks before any spending: each configured model answers one tiny
+    structured call (same path, parameters and effort as real calls), PubMed answers one
+    search, and the ontology service answers one lookup. A required failure aborts."""
+    checks = []
+
+    def check(name, fn, required=True):
+        t0 = time.perf_counter()
+        try:
+            checks.append({"check": name, "ok": True, "required": required, "detail": str(fn())[:200]})
+        except (Exception, FatalLLMError) as e:
+            checks.append({"check": name, "ok": False, "required": required,
+                           "error": f"{type(e).__name__}: {e}"[:500]})
+        checks[-1]["seconds"] = round(time.perf_counter() - t0, 1)
+
+    for role in ("reasoning", "cheap"):
+        model = rt.settings.models.get(rt.settings.provider, {}).get(role, "?")
+        check(f"LLM {role} model ({model})", lambda r=role: rt.llm.structured(
+            "preflight", Ping, "Answer with ok = true.", "ping", role=r, ctx={"schema": Ping}).ok)
+    check("PubMed search", lambda: f"{len(rt.source.search('butyrate regulatory T cells', 1)['pmids'])} hit(s)")
+    if rt.settings.ontology_provider in {"ols", "hybrid"}:
+        def ols():
+            hit = rt.resolver._ols("regulatory T cell")     # returns None on network errors too
+            if hit is None:
+                raise RuntimeError("no answer from OLS (unreachable, or exact match failed)")
+            return f"{hit.id} {hit.label}"
+        check("Ontology lookup (OLS)", ols, required=False)
+    return checks
 
 
 # ── revision signals ────────────────────────────────────────────────────────
@@ -239,6 +333,10 @@ RULES = [
      "PROMPTS['synthesize']; evidence.VERB_TIER"),
     ("LLM failures", lambda m: m["llm"]["total_failures"], lambda v: v > 0, "> 0",
      "schemas vs model structured output; see llm.per_task"),
+    ("run did not finish", lambda m: m["status"], lambda v: v != "completed", "failed / aborted",
+     "see status, error and failed_node; metrics cover completed steps only"),
+    ("token budget reached", lambda m: m["run"]["stop_reason"], lambda v: v == STOP_LABEL["BUDGET"],
+     "budget hit", "Settings.budget_tokens, or cost drivers in llm.per_task"),
     ("semantic layer degraded", lambda m: m["comparison"]["semantic_status"],
      lambda v: v in {"PARTIAL", "UNAVAILABLE"}, "PARTIAL / UNAVAILABLE", "semantic.adjudicate batches"),
 ]

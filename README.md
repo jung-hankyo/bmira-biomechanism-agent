@@ -1,6 +1,6 @@
 # B-MiRA — Biomedical Mechanism Inference Research Agent
 
-**v2.2** · LangGraph · Python 3.10+
+**v2.3** · LangGraph · Python 3.10+
 
 Ask *"Does X affect Y, and through which mechanisms?"*. B-MiRA searches PubMed, extracts claims from papers, grades the evidence, and weighs **several candidate pathways against each other** before writing a report in which every sentence is tied to a cited claim.
 
@@ -71,7 +71,7 @@ pip install -r requirements.txt
 **1. Try it offline (no keys, no network).** A synthetic scenario and a scripted model exercise the whole pipeline:
 
 ```bash
-python -m pytest -q tests          # 20 tests
+python -m pytest -q tests          # 28 tests
 streamlit run app.py               # choose "Offline demo" in the sidebar
 ```
 
@@ -98,10 +98,13 @@ The report and the run state can be downloaded as Markdown and JSON.
 ```bash
 python -m bmira.experiments                        # the 8 questions in experiments/questions.txt
 python -m bmira.experiments --only 1 2 --max-rounds 3
+python -m bmira.experiments --budget-tokens 2000000  # soft token cap per run
 python -m bmira.experiments --offline              # wiring check, no keys
 ```
 
-Each session writes **one** file, `runs/session_<timestamp>.json` (git-ignored), rewritten after every question. Per run it holds: LLM calls, tokens, latency and failures per task; queries and hits; screening and full-text rates; claims kept and dropped (with reasons and samples); uncredited method details; ontology resolution and synonym merges; grades and caps; claim comparisons and conflicts; step and pathway verdicts with reasons; leader per round; verification; warnings; the log tail; the report. A `signals` list flags measured values that crossed a heuristic threshold, each naming the code to inspect. The chat app offers the same summary as a download.
+**Before spending,** a preflight (a few seconds) sends one tiny call to each configured model with the same parameters as real calls, one PubMed search and one ontology lookup; a required failure aborts the session (`--no-preflight` skips it). **During a run,** rate limits, overloads and timeouts are retried with backoff; fatal errors (empty balance, invalid key, unknown model, unsupported parameter) stop the session at once instead of degrading silently. **A run that stops early is still summarized** from its last completed step, with `status`, `error` and `failed_node`, so paid work is never lost.
+
+Each session writes **one** file, `runs/session_<timestamp>.json` (git-ignored), rewritten after every question. Per run it holds: LLM calls, tokens, latency and failures per task; queries and hits; screening and full-text rates; claims kept and dropped (with reasons and samples); uncredited method details; ontology resolution and synonym merges; grades and caps; claim comparisons and conflicts; step and pathway verdicts with reasons; leader per round; verification; warnings; the log tail; the report. Per LLM task it also records the model used, reasoning tokens and an estimated cost (from the price table in `config.py`). The session header records models, effort settings, budget, preflight results and whether the code had uncommitted edits. A `signals` list flags measured values that crossed a heuristic threshold, each naming the code to inspect. The chat app offers the same summary as a download.
 
 ### Using the notebook
 
@@ -146,6 +149,10 @@ All in `bmira/config.py`; the app exposes the round limit.
 | `max_extract_per_round` | 10 | Papers read per round; papers found for a step are read first, the rest wait |
 | `max_claims_per_paper` | 8 | Claims taken from one paper (null and opposing findings are prioritized) |
 | `temperature` | `None` | Sampling temperature; `None` uses each model's default (some reasoning models accept nothing else) |
+| `reasoning_effort` | low / medium per task | OpenAI reasoning effort: low for classification tasks, medium for reading papers, planning and the report |
+| `budget_tokens` | `None` | Soft token cap per run, checked between rounds; when reached, searching stops and the report is still written |
+| `prices` | official list prices | USD per 1M tokens per model, used only for cost estimates in telemetry; edit to your current prices |
+| `llm_max_retries` / `llm_timeout_s` | 6 / 180 s | Retries with backoff for transient LLM errors; per-call timeout |
 
 ## Limitations
 
@@ -153,6 +160,7 @@ All in `bmira/config.py`; the app exposes the round limit.
 - Grade weights and thresholds are reasoned defaults, not calibrated values.
 - The relation vocabulary (11 relations) cannot express dose, timing or compositional effects; those stay in the claim's context fields.
 - Only open-access full texts are read; everything else is abstract-only, which caps the evidence grade. Full texts are read section by section (Results, figure legends, Methods first).
+- Cost estimates cover only models listed in `Settings.prices`; reasoning effort applies to OpenAI models only. The token budget is soft: the round in progress and the report can exceed it, so set a hard spend limit at the provider as well.
 - Rules are checked offline with invented papers. Ontology routing (OLS) and the quote checks have not yet been measured on real papers, so expect some valid claims to be dropped as too strict.
 
 ## Versioning
@@ -166,6 +174,8 @@ All in `bmira/config.py`; the app exposes the round limit.
 **v2.2.0** adds run telemetry: token, latency and failure accounting per LLM task, a batch experiment runner that writes one session summary file, revision signals, and eight experiment questions.
 
 **v2.2.1** registers B-MiRA's data types with LangGraph's checkpoint serializer, so runs keep working when newer LangGraph releases block unregistered types. Use v2.2.1 or later for live experiments.
+
+**v2.3.0** makes live runs safe to pay for: preflight checks, fatal-error abort, partial summaries for runs that stop early, per-task reasoning effort, a soft token budget, cost estimates, reasoning-token counts, and provenance of uncommitted edits. Log lines from parallel steps no longer merge.
 
 **v2.2.2** stops sending a fixed temperature, which some reasoning models reject (`Settings.temperature`, default `None` = the model's own default), and makes file encodings explicit so tests pass on Windows.
 

@@ -458,6 +458,9 @@ def portfolio(state, rt):
     rnd = this_round
     targets = pf.allocate(hyps, links, s, rnd)
     decision, gate = pf.decide(hyps, targets, rnd, s)
+    used = sum(getattr(rt.llm, "tokens_in", {}).values()) + sum(getattr(rt.llm, "tokens_out", {}).values())
+    if decision == "search_more" and s.budget_tokens and used >= s.budget_tokens:
+        decision, gate = "done", "BUDGET"            # soft cap: stop searching, still report
     if decision == "done":
         for k in targets:
             links[k].times_targeted -= 1
@@ -497,6 +500,8 @@ def run_warnings(state, rt) -> list[str]:
         w.append(f"Semantic adjudication {state['semantic_status']}: absent conflicts do not mean concordance.")
     if state.get("conflict_status") == "LLM_FAILED":
         w.append("Conflict triage failed: opposing findings were all counted as contradictions.")
+    if state.get("gate") == "BUDGET":
+        w.append("Search stopped early because the token budget was reached; open pathways were not searched further.")
     if state.get("gate") == "MAX_ROUNDS":
         w.append("Search stopped at the round limit while some pathways were still open.")
     if state.get("seed_status") == "FAILED":

@@ -67,6 +67,9 @@ def investigate(question: str):
             for line in lines:
                 status.write(line)
         final, info = execute(question, rt, on_progress=progress, echo=False)
+        if info["status"] != "completed":
+            status.update(label="Investigation stopped", state="error", expanded=True)
+            raise RuntimeError(f"{info['status']} at step {info['failed_node']}: {info['error']}")
         status.update(label="Investigation finished", state="complete", expanded=False)
     return final, rt, info
 
