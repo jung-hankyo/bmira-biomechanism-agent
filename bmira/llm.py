@@ -16,12 +16,19 @@ PROMPTS = {
         "(population/model, exposure/perturbation, comparator, outcome, mechanism hypothesis). "
         "Give exposure and outcome as bare entity or phenotype names, without verbs such as "
         "induction or suppression and without tissue words (e.g. 'regulatory T cell', not "
-        "'induction of colonic regulatory T cells'). Set expected_direction to the direction the question asserts for exposure -> outcome "
-        "(up, down, none, unknown). List 2-5 outcome_readouts: measurable readouts of the "
+        "'induction of colonic regulatory T cells'). If the question is about a decline, loss or "
+        "deficiency of the exposure ('NAD+ decline', 'TET2 loss'), name the bare entity ('NAD+', "
+        "'TET2') and set exposure_change to down; otherwise up. Set expected_direction to the "
+        "direction the question asserts for the exposure CHANGE -> outcome (up, down, none, "
+        "unknown): 'NAD+ decline drives inflammaging' is exposure_change down, expected_direction up. "
+        "List 2-5 outcome_readouts: measurable readouts of the "
         "outcome as bare entity names (e.g. FOXP3, IL-10, granzyme B). Set target_system "
         "to the population the question is about (human, animal, cell, any)."),
     "plan": (
-        "Write PubMed queries with MeSH terms, gene symbols and synonyms in valid syntax.\n"
+        "Write PubMed queries with MeSH terms, gene symbols and synonyms in valid syntax. Use at "
+        "most 3 AND-groups per query (more returns nothing) and no multi-word phrases PubMed does not "
+        "index: for null results use single words or short common phrases (negative, dispensable, "
+        "independent, \"no effect\"), never 'failed to induce'.\n"
         "If NO targets are given, return exactly 4 queries, one per intent: broad, mechanism, "
         "contradiction, negative_result.\n"
         "If targets are given, return exactly 3 queries PER target, intents gap_positive, "
@@ -77,7 +84,8 @@ PROMPTS = {
     "pair": (
         "For each pair of claims decide two things. same_finding: same exposure and materially "
         "the same measured endpoint, regardless of direction. same_context: same or compatible "
-        "model and cell type. Ignore citation quality."),
+        "model and cell type. Ignore citation quality. Return exactly one verdict per pair, in order, "
+        "with `pair` set to the number n of '[PAIR n]'."),
     "conflict": (
         "Triage candidate evidence conflicts. true_conflict: comparable systems disagree. "
         "context_dependent: findings differ because cell type, model, dose or timepoint differ. "

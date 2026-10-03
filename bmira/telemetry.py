@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from bmira.graph import build_agent
 from bmira.llm import FatalLLMError
+from bmira.normalize import lookup_key
 from bmira.portfolio import STATUS_LABEL, STOP_LABEL
 
 
@@ -142,6 +143,9 @@ def summarize(final: dict, rt, run: dict) -> dict:
     leaders = [h["hypotheses"][0][0] if h["hypotheses"] else None for h in history]
     pairs = list(rt.pair_cache.values())
     n_extracted = len(claims) + len(dropped)
+    by_label = {}                      # one label naming several concepts = a split node
+    for c in concepts:
+        by_label.setdefault(lookup_key(c.label), set()).add(res.canonical(c).id)
 
     zero = Counter()
     per_task = {}
@@ -163,7 +167,10 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "rounds": final.get("round_idx"), "stop_reason": STOP_LABEL.get(final.get("gate"), final.get("gate")),
             "provider": s.provider, "models": s.models.get(s.provider),
             "llm_client": type(llm).__name__, "embedder": getattr(rt.embedder, "name", "?"),
-            "literature_source": getattr(rt.source, "name", "?"), "settings": asdict(s)},
+            "literature_source": getattr(rt.source, "name", "?"),
+            # session files get shared: never write the NCBI key or the contact email
+            "settings": {**asdict(s), "ncbi_api_key": "set" if s.ncbi_api_key else "",
+                         "ncbi_email": "set" if s.ncbi_email else ""}},
         "parsed_question": final["parsed"].model_dump() if final.get("parsed") else None,
         "llm": {
             "per_task": per_task,
@@ -217,6 +224,7 @@ def summarize(final: dict, rt, run: dict) -> dict:
             # distinct entities / entity slots in kept claims: near 1.0 = every claim names
             # new nodes (fragmented graph); lower = claims share nodes and can connect
             "fragmentation": _share(len(concept_ids), 2 * len(claims)),
+            "duplicate_labels": sorted(k for k, ids in by_label.items() if len(ids) > 1),
             "entity_cache_reused": getattr(res, "disk_hits", 0),
             "tissues": _count(t for c in claims for t in c.context_tissue.split(", ") if t),
             "distinct_contexts": len({c.context_concept for c in claims if c.context_concept})},
@@ -226,6 +234,7 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "limiting_axis": _count(c.grade_detail.get("limiting_axis") for c in claims)},
         "comparison": {
             "semantic_status": final.get("semantic_status"), "pairs_judged": len(pairs),
+            "pairs_asked": getattr(llm, "items", zero)["pair"],
             "same_finding": sum(v.same_finding for v in pairs), "same_context": sum(v.same_context for v in pairs),
             "conflict_status": final.get("conflict_status"),
             "conflicts": _count(c.verdict for c in final.get("conflicts", []))},
@@ -251,6 +260,15 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "overclaims": len(verif.get("overclaims", [])), "unknown_ids": len(verif.get("unknown_ids", [])),
             "missing_tags": len(verif.get("missing_tags", [])), "entailment_issues": len(verif.get("entailment", [])),
             "overclaim_samples": [o["sentence"][:200] for o in verif.get("overclaims", [])][:5]},
+        # per-claim and per-step tables: the hand spot-check (protocol step 5) needs them
+        "claims": [{"id": c.id, "pmid": c.pmid, "subject": f"{c.subject_label} [{c.subject_concept}]",
+                    "relation": c.relation_norm, "object": f"{c.object_label} [{c.object_concept}]",
+                    "grade": c.grade, "limiting_axis": c.grade_detail.get("limiting_axis"),
+                    "system": c.system, "span": c.span[:120]} for c in claims],
+        "links": [{"key": ln.key, "step": f"{ln.subject_label} -{ln.relation}-> {ln.object_label}",
+                   "status": STATUS_LABEL[ln.status], "reason": ln.reason, "n_studies": ln.n_studies,
+                   "grade": ln.grade, "support": ln.support_ids, "corroborating": ln.corroborating_ids}
+                  for ln in links.values()],
         "warnings": final.get("warnings", []),
         "log": {"problems": [ln for ln in run["log"] if re.search(r"fail|WARN|error", ln, re.I)][:30],
                 "tail": run["log"][-40:], "traceback": run.get("traceback")},
@@ -347,6 +365,11 @@ RULES = [
      "budget hit", "Settings.budget_tokens, or cost drivers in llm.per_task"),
     ("semantic layer degraded", lambda m: m["comparison"]["semantic_status"],
      lambda v: v in {"PARTIAL", "UNAVAILABLE"}, "PARTIAL / UNAVAILABLE", "semantic.adjudicate batches"),
+    ("pair verdicts lost", lambda m: _share(m["comparison"]["pairs_judged"], m["comparison"]["pairs_asked"]),
+     lambda v: v is not None and v < 0.5, "< 0.5 of asked pairs judged",
+     "semantic.adjudicate pair numbering; PROMPTS['pair']; the model returned fewer or mis-numbered verdicts"),
+    ("one label, several concepts", lambda m: m["normalization"]["duplicate_labels"],
+     lambda v: len(v) > 0, "> 0 labels", "normalize.EntityResolver._labelled / consolidate_aliases"),
 ]
 
 

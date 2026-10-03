@@ -23,12 +23,34 @@ PREFIX_CATEGORY = {
 }
 
 
+ABBR_TAIL = re.compile(r"\s*\((?=[^()]*[A-Z])[^()\s]{2,12}\)?$")      # '(HDAC)', or a truncated '(CD25'
+
+
 def clean(s: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[\u2013\u2014]", "-", s or "")).strip(" .,;:()[]{}")
+    s = re.sub(r"\s+", " ", re.sub(r"[\u2013\u2014]", "-", s or "")).strip(" .,;:[]{}")
+    m = ABBR_TAIL.search(s)
+    if m and len(s[:m.start()]) >= 2 and s[:m.start()].lower() not in GENERIC:
+        s = s[:m.start()]                          # the abbreviation is an alias, not part of the name
+    if s.count("(") != s.count(")") or re.fullmatch(r"\([^()]*\)", s):
+        s = s.strip(" .,;:()[]{}")                 # a stray or wrapping parenthesis only
+    return s
+
+
+GREEK = {"α": "alpha", "β": "beta", "γ": "gamma", "δ": "delta", "Δ": "delta",
+         "ε": "epsilon", "ζ": "zeta", "η": "eta", "θ": "theta", "κ": "kappa",
+         "λ": "lambda", "μ": "mu", "µ": "mu", "σ": "sigma", "τ": "tau",
+         "ω": "omega"}
+
+
+def ascii_name(s: str) -> str:
+    """Spell out Greek letters and unify charges: 'IFN-γ' and 'IFN-α' used to collapse to
+    'ifn', 'IL-1β' and 'IL-1α' to 'il 1'; 'NAD(+)' and 'NAD⁺' did not match 'NAD+'."""
+    s = re.sub(r"\(\s*\+\s*\)", "+", s.replace("⁺", "+"))
+    return "".join(GREEK.get(ch, ch) for ch in s)
 
 
 def lookup_key(s: str) -> str:
-    return re.sub(r"[^a-z0-9+]+", " ", clean(s).lower()).strip()
+    return re.sub(r"[^a-z0-9+]+", " ", ascii_name(clean(s)).lower()).strip()
 
 
 @dataclass(frozen=True)
@@ -43,7 +65,7 @@ class Concept:
 
 
 def local_concept(label: str) -> Concept:
-    slug = re.sub(r"[^a-z0-9+]+", "_", clean(label).lower()).strip("_")[:120] or "unknown"
+    slug = re.sub(r"[^a-z0-9+]+", "_", ascii_name(clean(label)).lower()).strip("_")[:120] or "unknown"
     return Concept(f"LOCAL:{slug}", clean(label) or "unknown")
 
 
@@ -66,7 +88,8 @@ class EntityResolver:
     # ── disk cache: ontology and LLM resolutions are reused across runs ──
     def _path(self):
         d = self.settings.cache_dir
-        return Path(d) / f"entities_{self.settings.ontology_provider}.json" if d else None
+        # v2: v1 files hold split LOCAL ids for LLM-normalized labels ('Treg cell' vs 'Treg')
+        return Path(d) / f"entities_v2_{self.settings.ontology_provider}.json" if d else None
 
     def _load(self) -> dict:
         p = self._path()
@@ -131,12 +154,15 @@ class EntityResolver:
                     print(f"[entity] batch failed ({type(e).__name__}); {len(chunk)} kept unresolved")
                     continue
                 by_key = {lookup_key(singular(r.surface)): r for r in out.items}
+                names = {lookup_key(singular(r.normalized_label)): singular(r.normalized_label)
+                         for r in by_key.values()}
+                names = {k: v for k, v in names.items() if k and k not in self.cache and k not in self._disk}
+                with ThreadPoolExecutor(max_workers=8) as ex:
+                    hits = dict(zip(names, ex.map(self._known, names.values())))
                 for n in chunk:
                     r = by_key.get(lookup_key(n))
                     if r:
-                        base = local_concept(singular(r.normalized_label))
-                        found[lookup_key(n)] = Concept(base.id, base.label, r.category or "unknown",
-                                                       "llm", float(r.confidence))
+                        found[lookup_key(n)] = self._labelled(r.normalized_label, r.category, r.confidence, hits)
         for key, name in todo.items():
             self._remember(key, found.get(key) or local_concept(name))
 
@@ -163,6 +189,20 @@ class EntityResolver:
             if c.id != best.id:
                 self.alias[c.id] = best.id
 
+    def _labelled(self, label: str, category: str, confidence: float, hits: dict | None = None) -> Concept:
+        """An LLM-normalized label is looked up like any surface (cache, disk, ontology) before it
+        becomes a LOCAL id; otherwise 'Treg cell' -> LOCAL:regulatory_t_cell and 'Treg' ->
+        CL:0000815 name one cell type twice and no pathway can connect them."""
+        name = singular(label)
+        key = lookup_key(name)
+        known = self.cache.get(key) or self._disk.get(key) or (hits or {}).get(key) \
+            or (None if hits is not None else self._known(name))
+        if known:
+            self._remember(key, known)
+            return known
+        base = local_concept(name)
+        return Concept(base.id, base.label, category or "unknown", "llm", float(confidence))
+
     def _resolve(self, name: str) -> Concept:
         if not name:
             return local_concept("unknown")
@@ -173,8 +213,7 @@ class EntityResolver:
             try:
                 r = self.llm.structured("entity", EntityResolution, PROMPTS["entity"],
                                         f"Entity: {name}", role="cheap", ctx={"surface": name})
-                base = local_concept(singular(r.normalized_label))
-                return Concept(base.id, base.label, r.category or "unknown", "llm", float(r.confidence))
+                return self._labelled(r.normalized_label, r.category, r.confidence)
             except Exception as e:
                 print(f"[entity] LLM resolution failed for {name!r}: {type(e).__name__}")
         return local_concept(name)
@@ -195,6 +234,8 @@ class EntityResolver:
         if not exact:
             return None
         exact = [d for d in exact if _species(d.get("label", "")) != "other"]
+        if "allele" not in name.lower():               # NCIT 'HDAC9 wt Allele' is not the enzyme family
+            exact = [d for d in exact if not re.search(r"\ballele\b", d.get("label", ""), re.I)]
         if not exact:                                  # e.g. only 'interleukin-10 (chicken)'
             return None
         onto = lambda d: ONTOLOGIES.index(d["ontology_name"]) if d.get("ontology_name") in ONTOLOGIES else 99
@@ -265,14 +306,16 @@ def complete_linkage(ids: list[str], ok: set[frozenset]) -> list[list[str]]:
     return groups
 
 
-def consolidate_aliases(claims, resolver: EntityResolver, llm, verdicts: dict, batch=50, cap=200):
-    """Ask the LLM only about new, lexically plausible pairs; merge with complete linkage."""
+def consolidate_aliases(claims, resolver: EntityResolver, llm, verdicts: dict, batch=50, cap=200,
+                        extra_ids=()):
+    """Ask the LLM only about new, lexically plausible pairs; merge with complete linkage.
+    `extra_ids`: concepts used by pathway proposals that no claim names (yet)."""
     concepts = {}
-    for c in claims:                     # the claims' resolved entities, never raw surfaces
-        for cid in (c.subject_concept, c.object_concept):
-            if cid in resolver.concepts:
-                k = resolver.canonical(resolver.concepts[cid])
-                concepts[k.id] = k
+    # the resolved entities, never raw surfaces
+    for cid in [i for c in claims for i in (c.subject_concept, c.object_concept)] + list(extra_ids):
+        if cid in resolver.concepts:
+            k = resolver.canonical(resolver.concepts[cid])
+            concepts[k.id] = k
     ids = sorted(concepts)
     todo = []
     for x in range(len(ids)):
@@ -460,9 +503,32 @@ def split_location(surface: str) -> tuple[str, str]:
     return clean(s), ", ".join(dict.fromkeys(names))
 
 
+# 'NAD+ decline', 'Tet2 loss', 'vitamin D deficiency': a decrease of the entity, not another entity.
+# Without this the exposure never meets the claims that name the bare 'NAD+' / 'Tet2'.
+CHANGE_DOWN = r"loss|deficiency|depletion|decline|knockout|deletion|knockdown"
+NOT_AN_ENTITY = {"bone", "weight", "hearing", "muscle", "hair", "fat", "vision", "memory", "tissue", "cell",
+                 "cells", "body", "blood", "appetite", "neuron", "neuronal", "synapse", "skin", "lung"}
+
+
+def split_change(surface: str) -> tuple[str, str]:
+    """'age-related NAD+ decline' -> ('NAD+', 'down'); 'bone loss' stays (a phenotype)."""
+    s = clean(surface)
+    for pat in (rf"^(?:(?:age|aging|ageing)[- ](?:related|associated)\s+)?(.+?)\s+(?:{CHANGE_DOWN})$",
+                rf"^(?:{CHANGE_DOWN})\s+of\s+(?:the\s+)?(.+)$"):
+        m = re.match(pat, s, flags=re.I)
+        if m and len(m.group(1)) >= 2 and m.group(1).lower() not in GENERIC \
+                and m.group(1).split()[-1].lower() not in NOT_AN_ENTITY:
+            return m.group(1), "down"
+    return s, ""
+
+
+def entity_change(surface: str) -> str:
+    return split_change(surface)[1]
+
+
 def entity_of(surface: str) -> tuple[str, str, str]:
     """surface -> (entity, attribute, tissue)."""
-    rest, attr = split_attribute(surface)
+    rest, attr = split_attribute(split_change(surface)[0])
     rest = clean(re.sub(rf"^(?:{MODIFIERS})\s+", "", rest, flags=re.I)) or rest
     rest, tissue = split_location(rest)
     return rest, attr, tissue
@@ -483,6 +549,8 @@ def singular(name: str) -> str:
 def entity_parts(surface: str) -> tuple[list[str], str]:
     """'NFAT1 and SMAD3' -> (['NFAT1', 'SMAD3'], ''). Only short parts are split, so names
     such as 'signal transducer and activator of transcription 3' stay whole."""
+    if re.search(r"[-−–]/[-−–]|\+/[-−–+]", surface):    # Tet2-/-, Foxp3+/+: one genotype
+        return [clean(surface)], ""
     rest, tissue = split_location(surface)
     parts = [p.strip() for p in re.split(r"\s*,\s*(?:and\s+|or\s+)?|\s+and\s+|\s*/\s*", rest) if p.strip()]
     if len(parts) < 2 or any(len(p.split()) > 3 or len(p) < 2 for p in parts):
@@ -504,7 +572,8 @@ def abbreviations(text: str) -> list[tuple[str, str]]:
 # ── claim-span consistency ──────────────────────────────────────────────────
 STOP = {"the", "and", "with", "cells", "cell", "human", "mouse", "mice", "levels", "level", "expression"}
 NULL_CUE = re.compile(r"\b(?:no|not|never|neither|nor|unchanged|unaffected|without|fail(?:ed|s)?|"
-                      r"similar|comparable|independent of)\b")
+                      r"lack(?:s|ed|ing)?|similar|comparable|independent of)\b")
+BUT_NOT = re.compile(r"\bbut not\s+[\w\-+]+")      # 'butyrate but not pentanoate exerts': negates the other agent
 NEGATORS = {"no", "not", "never", "neither", "nor", "without", "failed", "fail", "fails"}
 
 
@@ -555,7 +624,7 @@ def check_claim(c, source: str, abbrevs=()) -> tuple[str, list[str]]:
     rel = c.relation.lower().replace("n't", " not")
     if NULL_CUE.search(rel):
         return ("", []) if NULL_CUE.search(span) else ("null claim but the quote reports an effect", [])
-    words = re.findall(r"[a-z0-9]+", span)
+    words = re.findall(r"[a-z0-9]+", BUT_NOT.sub(" ", span))
     verbs = [w for w in re.findall(r"[a-z]+", rel) if len(w) >= 4]
     hits = [i for i, w in enumerate(words) if any(w.startswith(v[:4]) for v in verbs)]
     if not hits:

@@ -149,9 +149,9 @@ class SurrogateLLM:
 
     def _pair(self, ctx):
         return PairBatch(pairs=[PairAdjudication(
-            claim_a=a.id, claim_b=b.id, same_context=(a.system, a.context_concept) == (b.system, b.context_concept),
+            pair=n, same_context=(a.system, a.context_concept) == (b.system, b.context_concept),
             same_finding=(a.subject_concept, a.object_concept) == (b.subject_concept, b.object_concept))
-            for a, b in ctx["pairs"]])
+            for n, (a, b) in enumerate(ctx["pairs"], 1)])
 
     def _conflict(self, ctx):
         out = []

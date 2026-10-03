@@ -6,14 +6,14 @@ from dataclasses import dataclass, field
 class Settings:
     provider: str = "openai"                      # "openai" | "anthropic"
     models: dict = field(default_factory=lambda: {
-        "openai": {"reasoning": "gpt-5.6-terra", "cheap": "gpt-5.6-luna"},
-        "anthropic": {"reasoning": "claude-sonnet-5", "cheap": "claude-haiku-4-5-20251001"},
+        "openai": {"reasoning": "gpt-6-sol", "cheap": "gpt-6-luna"},
+        "anthropic": {"reasoning": "claude-sonnet-5-5", "cheap": "claude-sonnet-5-5"},
     })
     # retrieval
     max_papers_per_query: int = 20               # coverage round
     max_papers_per_target_query: int = 5         # targeted rounds: reading capacity is the limit
     min_relevance: int = 50                      # screening score (0-100) needed for inclusion
-    max_extract_per_round: int = 10               # top-N by relevance; the rest wait, they are not dropped
+    max_extract_per_round: int = 20               # top-N by relevance; the rest wait, they are not dropped
     max_claims_per_paper: int = 8
     fulltext_char_limit: int = 60000
     # evidence

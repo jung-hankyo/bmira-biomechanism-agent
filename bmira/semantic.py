@@ -68,17 +68,21 @@ def candidate_pairs(claims, embedder, threshold: float, k: int):
 
 
 def adjudicate(claims, pairs, llm, cache: dict, batch=30):
-    """Return (new verdicts, n_failed_pairs). `cache` maps frozenset(ids) -> PairAdjudication."""
+    """Return the number of pairs left unjudged. `cache` maps frozenset(ids) -> PairAdjudication.
+
+    Pairs are numbered 1..n within a batch and verdicts come back by that number: the first live
+    run judged 0 of 227 pairs because verdicts that had to echo two long claim ids never matched."""
     by_id = {c.id: c for c in claims}
     todo = [(a, b) for a, b, _ in pairs if frozenset((a, b)) not in cache]
     failed = 0
     for s in range(0, len(todo), batch):
         chunk = todo[s:s + batch]
         text = "\n\n".join(
-            f"[PAIR {a} vs {b}]\nA: {by_id[a].subject_label} --{by_id[a].relation_norm}--> "
+            f"[PAIR {n}]\nA: {by_id[a].subject_label} --{by_id[a].relation_norm}--> "
             f"{by_id[a].object_label} | context={by_id[a].context_cell_type}; {by_id[a].context_model}\n"
             f"B: {by_id[b].subject_label} --{by_id[b].relation_norm}--> {by_id[b].object_label} "
-            f"| context={by_id[b].context_cell_type}; {by_id[b].context_model}" for a, b in chunk)
+            f"| context={by_id[b].context_cell_type}; {by_id[b].context_model}"
+            for n, (a, b) in enumerate(chunk, 1))
         try:
             out = llm.structured("pair", PairBatch, PROMPTS["pair"], text,
                                  ctx={"pairs": [(by_id[a], by_id[b]) for a, b in chunk]},
@@ -87,10 +91,14 @@ def adjudicate(claims, pairs, llm, cache: dict, batch=30):
             print(f"[semantic] batch failed: {type(e).__name__}")
             failed += len(chunk)
             continue
-        asked = {frozenset(p) for p in chunk}
+        stray = 0
         for v in out.pairs:
-            if frozenset((v.claim_a, v.claim_b)) in asked:
-                cache[frozenset((v.claim_a, v.claim_b))] = v
+            if 1 <= v.pair <= len(chunk):
+                cache[frozenset(chunk[v.pair - 1])] = v
+            else:
+                stray += 1
+        if stray:
+            print(f"[semantic] {stray} verdict(s) numbered outside 1..{len(chunk)} were ignored")
         failed += sum(1 for p in chunk if frozenset(p) not in cache)
     return failed
 

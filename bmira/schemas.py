@@ -44,8 +44,10 @@ class ParsedQuestion(BaseModel):
         "2-5 measurable readouts of the outcome as bare entity names, e.g. IFNG, granzyme B"))
     target_system: Literal["human", "animal", "cell", "any"] = Field(
         "any", description="Population or system the question is about")
+    exposure_change: Literal["up", "down"] = Field(
+        "up", description="down if the question is about a decrease, loss or deficiency of the exposure")
     expected_direction: Literal["up", "down", "none", "unknown"] = Field(
-        "unknown", description="Direction the question asserts for exposure -> outcome")
+        "unknown", description="Direction the question asserts for the exposure CHANGE -> outcome")
 
 
 class SearchQuery(BaseModel):
@@ -183,11 +185,9 @@ class AliasBatch(BaseModel):
 
 # ── semantic layer and conflicts ────────────────────────────────────────────
 class PairAdjudication(BaseModel):
-    claim_a: str
-    claim_b: str
+    pair: int = Field(description="The number n of the pair, as in '[PAIR n]'")
     same_finding: bool = Field(description="Same exposure and materially the same measured endpoint")
     same_context: bool = Field(description="Same or compatible model and cell type")
-    rationale: str = ""
 
 
 class PairBatch(BaseModel):

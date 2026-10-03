@@ -39,25 +39,32 @@ def claim_study_type(paper_type, pubtype, system) -> str:
     return SYSTEM_STUDY.get(system) or paper_type or "cell_line"
 
 
+# Wording that shows a compound or condition was given: 'provision of X', '0.25 mM', 'in vitro'.
+GIVEN = (r"administ|provision|provid|receiv|\bfed\b|feeding|gavage|inject|incubat|stimulat|titrat|exogenous|"
+         r"\d\s?(?:mm|[µμu]m|nm|mg|mcg|iu|g)\b|in vitro|in vivo|ex vivo|"
+         r"randomi[sz]|randomly|placebo|usual care|standard care|standard therapy|daily|weekly")
 METHOD_CUES = {
     "knockout": r"knock-?out|delet|deficien|-/-|null mice|crispr|\bko\b",
     "knockdown": r"knock-?down|sirna|shrna|silenc|antisense",
     "overexpression": r"overexpress|transduc|transfect|forced expression",
-    "pharmacological": r"inhibit|agonist|antagonist|treat|block|drug|compound|supplement|precursor|\bdose",
-    "environmental": r"expos|treat|cultur|condition|supplement|medium|hypoxi|diet|acid",
+    "pharmacological": r"inhibit|agonist|antagonist|treat|block|drug|compound|supplement|precursor|\bdose|" + GIVEN,
+    "environmental": r"expos|treat|cultur|condition|supplement|medium|hypoxi|diet|acid|" + GIVEN,
     "transfer": r"transfer|adoptive|transplant",
     "genetic_association": r"variant|polymorphism|snp|allele|gwas|mendelian",
 }
 RESCUE_CUE = r"rescu|restor|re-?express|reconstitut|add-?back"
 ORTHOGONAL_CUE = r"independent|orthogonal|second|alternative|validat|confirm"
-COMPARATOR_CUE = r"compar|versus|\bvs\.?|relative to|than|control|wild-?type|\bwt\b|vehicle|untreated|baseline|scrambled"
+COMPARATOR_CUE = (r"compar|versus|\bvs\.?|relative to|than|control|wild-?type|\bwt\b|vehicle|untreated|baseline|"
+                  r"scrambled|absence of|\bwhereas\b|\bwhile\b|\black(?:s|ed|ing)?\b|\bunlike\b|in contrast|"
+                  r"\bbut not\b|\bwithout\b|\balone\b|randomi[sz]|\btrials?\b|placebo|usual care|"
+                  r"standard care|standard therapy|\bsham\b")
 
 
 def verify_methods(c, source: str):
     """Method fields drive the causal grade, so each needs textual evidence in the claim's
     quote or an anchored methods sentence; unsupported fields are reset and recorded."""
     text = c.span + (" " + c.methods_span if c.methods_span and span_is_anchored(c.methods_span, source) else "")
-    text = text.lower()
+    text = text.lower().replace("−", "-").replace("–", "-")      # 'Tbx21−/−' uses a minus sign
     checks = []
     if c.perturbation_class != "none" and not re.search(METHOD_CUES[c.perturbation_class], text):
         checks.append(f"perturbation '{c.perturbation_class}' not evidenced")
@@ -75,9 +82,12 @@ def causal_support(c) -> int | None:
     if c.relation_norm not in CAUSAL_RELATIONS:
         return None                                # not applicable, not "zero evidence"
     s = CAUSAL_BASE.get(c.perturbation_class, 0)
-    if s >= 2 and (c.rescue_arm or c.orthogonal_validation):
+    # randomization with a control arm stands in for a rescue arm: it removes confounding
+    checked = c.rescue_arm or c.orthogonal_validation or (
+        s >= 2 and c.comparator_present and c.study_type in {"human_rct", "meta_analysis"})
+    if s >= 2 and checked:
         s = 3
-    if c.perturbation_class == "pharmacological" and not (c.rescue_arm or c.orthogonal_validation):
+    if c.perturbation_class == "pharmacological" and not checked:
         s = min(s, 2)                              # off-target confounding
     if not c.comparator_present:
         s = min(s, 1)
@@ -145,9 +155,21 @@ MAX_TIER = {"ungraded": 1, "weak": 1, "moderate": 3, "strong": 4}
 STRUCTURE_TAG = re.compile(r"^(?:[HL]\d+|NO_EVIDENCE)$")
 
 
+# 'more induced regulatory T cells': 'induced' names a cell type here, it is not a causal verb
+NOUN_INDUCED = re.compile(
+    r"\b(more|fewer|of|on|the|and|or|for|with|than|in|to)\s+(?:induced|inducible)\s+(?=(?:and other\s+)?"
+    r"(?:(?:regulatory|t[- ]regulatory|helper|effector|memory)\s+)*(?:t[- ]?)?(?:cells?|tregs?|itregs?)\b)")
+# what follows these is mentioned, not asserted: 'do not establish that X induces Y', 'would need to test'
+NOT_ASSERTED = re.compile(r"\b(?:do|does|did|can|could)\s*not\s+(?:establish|show|demonstrate|prove|support|"
+                          r"confirm|indicate|imply|identify|reveal)\b|\bneeds? to\b|\bwhether\b")
+
+
 def sentence_tier(sentence: str) -> int:
     """Strongest verb tier; a verb negated within three words reads as a null statement."""
-    s, best = sentence.lower(), 0
+    s, best = re.sub(r"\[[A-Za-z0-9_\-]+\]", " ", sentence.lower()), 0
+    s = NOUN_INDUCED.sub(r"\1 ", s)
+    if m := NOT_ASSERTED.search(s):
+        s = s[:m.start()]
     for tier, pats in VERB_TIER.items():
         for p in pats:
             for m in re.finditer(p, s):

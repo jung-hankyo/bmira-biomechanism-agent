@@ -22,8 +22,9 @@ from bmira.evidence import grade_claim, prose_sentences, verify_text
 from bmira.llm import PROMPTS
 from bmira.evidence import claim_study_type, verify_methods
 from bmira.normalize import (EntityResolver, abbreviations, check_claim, consolidate_aliases,
-                             entity_of, entity_parts, lexical_relation, lookup_key)
-from bmira.schemas import (Claim, ClaimList, Conflict, EntailmentBatch, Hypothesis, LinkEvidence,
+                             entity_change, entity_of, entity_parts, lexical_relation, lookup_key,
+                             split_change)
+from bmira.schemas import (Claim, ClaimList, Conflict, DIRECTION, EntailmentBatch, Hypothesis, LinkEvidence,
                            Paper, ParsedQuestion, PathwayProposal, QueryPlan,
                            RelationResolutionBatch, Screen, SearchQuery)
 from bmira.semantic import adjudicate, candidate_pairs, clusters, conflict_candidates, triage
@@ -103,10 +104,12 @@ class State(TypedDict, total=False):
 def parse(state, rt):
     p = rt.llm.structured("parse", ParsedQuestion, PROMPTS["parse"], state["question"],
                           ctx={"question": state["question"]})
+    bare, change = split_change(p.exposure)                # 'NAD+ decline' -> 'NAD+', exposure_change down
+    p = p.model_copy(update={"exposure": bare, "exposure_change": change or p.exposure_change})
     exp, out = rt.resolver.resolve(entity_of(p.exposure)[0]), rt.resolver.resolve(entity_of(p.outcome)[0])
     readouts = [rt.resolver.resolve(entity_of(x)[0]) for x in p.outcome_readouts]
     print(f"[parse] exposure={exp.label} outcome={out.label} readouts={[r.label for r in readouts]} "
-          f"expected={p.expected_direction} population={p.target_system}")
+          f"expected={p.expected_direction} exposure_change={p.exposure_change} population={p.target_system}")
     return {"parsed": p, "exposure": exp.id, "outcome": out.id, "round_idx": 0, "targets": [],
             "outcome_ids": [out.id] + [r.id for r in readouts]}
 
@@ -311,6 +314,7 @@ def _set_concepts(c, rt):
 
 def normalize(state, rt):
     claims = [_as(Claim, c) for c in state.get("claims", [])]
+    fresh = [c for c in claims if not c.relation_norm]        # typed this round: restate loss claims once
     for c in claims:
         if not c.relation_norm:
             c.relation_norm, c.relation_source = lexical_relation(c.relation_raw), "lexical"
@@ -330,11 +334,16 @@ def normalize(state, rt):
                     c.relation_confidence = r.confidence
         except Exception as e:
             print(f"[relation] batch failed ({type(e).__name__}); claims stay pending for retry")
+    for c in fresh:      # 'Tet2 loss increases IL-6' is 'Tet2 decreases IL-6' for the bare entity
+        if c.relation_norm in DIRECTION and (entity_change(c.subject) == "down") != (entity_change(c.object) == "down"):
+            c.relation_norm = "decreases" if c.relation_norm == "increases" else "increases"
     rt.resolver.resolve_many([e for c in claims for e in (entity_of(c.subject)[0], entity_of(c.object)[0])]
                              + [c.context_cell_type for c in claims if c.context_cell_type])
     for c in claims:
         _set_concepts(c, rt)
-    merged = consolidate_aliases(claims, rt.resolver, rt.llm, rt.alias_verdicts)
+    nodes = [n for h in state.get("hypotheses", []) for k in _as(Hypothesis, h).links
+             for n in (pf.split_key(k)[0], pf.split_key(k)[2])]          # pathway nodes join the merge
+    merged = consolidate_aliases(claims, rt.resolver, rt.llm, rt.alias_verdicts, extra_ids=nodes)
     target = _as(ParsedQuestion, state["parsed"]).target_system
     for c in claims:
         _set_concepts(c, rt)                               # cheap: cached + alias registry
@@ -425,6 +434,7 @@ def portfolio(state, rt):
     for h in hyps:
         h.links = [_canon_key(k, rt) for k in h.links]
     labels = {cid: c.label for cid, c in r.concepts.items()}
+    ancestors = {cid: tuple(_canon(a, rt) for a in c.ancestors) for cid, c in r.concepts.items() if c.ancestors}
     p = _as(ParsedQuestion, state["parsed"])
     exposure = _canon(state["exposure"], rt)
     named = {_canon(i, rt) for i in state.get("outcome_ids", [state["outcome"]])}
@@ -436,7 +446,9 @@ def portfolio(state, rt):
             out = rt.llm.structured(
                 "seed", PathwayProposal, PROMPTS["seed"].format(k=s.n_seed_hypotheses),
                 f"Question: {state['question']}\nHypothesis: {p.mechanism_hypothesis}\n"
-                f"Exposure: {p.exposure}\nOutcome: {p.outcome}\nClaims:\n{_claims_summary(claims)}",
+                f"Exposure: {p.exposure}" + (" (the question concerns a DECREASE of it: write every link as the "
+                                           "effect of an INCREASE of its source)" if p.exposure_change == "down" else "")
+                + f"\nOutcome: {p.outcome}\nClaims:\n{_claims_summary(claims)}",
                 ctx={"parsed": p, "claims": claims})
             for pw in out.pathways[:s.n_seed_hypotheses]:
                 keys, lab = pf.proposal_keys(pw, r)
@@ -452,13 +464,13 @@ def portfolio(state, rt):
     discounted = {frozenset((a, b)) for c in conflicts if c.verdict != "true_conflict"
                   for a in c.claim_ids for b in c.claim_ids if a < b}
     extra = {k for h in hyps for k in h.links}
-    links = pf.build_links(claims, prior, rt.pair_cache, labels, s, extra, discounted)
+    links = pf.build_links(claims, prior, rt.pair_cache, labels, s, extra, discounted, ancestors)
     for path in pf.ledger_paths(links, exposure, outcomes, s.max_path_len):
         if len(hyps) >= s.max_hypotheses:      # no slot: adding then trimming would churn ids
             break
         via = [links[k].object_label for k in path[:-1]]
         _add(hyps, path, "ledger_path", "Literature-graph route" + (f" via {', '.join(via)}" if via
-             else ": direct"), "found by graph search over supported steps", False)
+             else f": direct to {links[path[-1]].object_label}"), "found by graph search over supported steps", False)
     novel = pf.novel_intermediates(links, hyps, exposure, outcomes)
     if novel and len(hyps) < s.max_hypotheses:            # gated expansion, at most one per round
         try:
@@ -476,10 +488,10 @@ def portfolio(state, rt):
         except Exception as e:
             print(f"[portfolio] expansion failed ({type(e).__name__})")
     links = pf.build_links(claims, links, rt.pair_cache, labels, s,
-                           {k for h in hyps for k in h.links}, discounted)
+                           {k for h in hyps for k in h.links}, discounted, ancestors)
 
     cats = {cid: c.category for cid, c in r.concepts.items()}
-    hyps = pf.evaluate(hyps, links, cats, p.expected_direction, s)
+    hyps = pf.evaluate(hyps, links, cats, pf.pathway_sign(p.expected_direction, p.exposure_change), s)
     rnd = this_round
     targets = pf.allocate(hyps, links, s, rnd)
     decision, gate = pf.decide(hyps, targets, rnd, s)
@@ -627,6 +639,7 @@ def verify(state, rt):
     p = _as(ParsedQuestion, state["parsed"])
     stop = (f"Search stopped after {state['round_idx']} rounds: {pf.STOP_LABEL[state['gate']]}. "
             f"Outcome measured as: {', '.join([p.outcome] + p.outcome_readouts)}. "
+            + (f"Question analysed as a decrease of {p.exposure}. " if p.exposure_change == "down" else "") +
             f"Population: {p.target_system}. Scores rank pathways; they are not probabilities.")
     report = (state["synthesis"] + "\n\n---\n## Pathway portfolio (computed)\n" + stop + "\n\n"
               + "\n".join(table)

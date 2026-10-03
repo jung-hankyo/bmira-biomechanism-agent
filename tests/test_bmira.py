@@ -480,3 +480,264 @@ def test_classification_tasks_use_cheap_model():
         assert llm._for("extract", "reasoning")["model"] == m["reasoning"]
     finally:
         del sys.modules["langchain_openai"]
+
+
+# K1-K10: fixes from the pilot3 live run (butyrate -> Treg).
+class _FakeLLM:
+    """Answers 'entity'/'entities' with one fixed label and 'alias' with 'same'."""
+    def __init__(self, label="regulatory T cell"):
+        self.label = label
+
+    def structured(self, task, schema, system, user, role="reasoning", ctx=None, n_items=1):
+        from bmira.schemas import AliasBatch, AliasVerdict, EntityBatch, EntityItem, EntityResolution
+        if task == "entities":
+            return EntityBatch(items=[EntityItem(surface=s, normalized_label=self.label, category="cell_type",
+                                                 confidence=0.9) for s in ctx["surfaces"]])
+        if task == "alias":
+            return AliasBatch(verdicts=[AliasVerdict(label_a=a, label_b=b, same_entity=True) for a, b in ctx["pairs"]])
+        return EntityResolution(normalized_label=self.label, category="cell_type", confidence=0.9)
+
+
+def test_llm_label_is_looked_up_before_going_local():
+    import bmira.normalize as nz
+    cl = nz.Concept("CL:1", "regulatory T cell", "cell_type", "ols", 0.9)
+    r = nz.EntityResolver(Settings(ontology_provider="hybrid"), _FakeLLM())
+    r._ols = lambda name: cl if nz.lookup_key(name) == "regulatory t cell" else None
+    r.resolve_many(["Treg cell", "regulatory T cell"])                  # batched path
+    assert r.resolve("Treg cell").id == "CL:1"
+    assert r.resolve("Foxp3 Treg ratio").id == "CL:1"                   # single path
+
+
+def test_ols_skips_allele_terms(monkeypatch):
+    import bmira.normalize as nz
+
+    class R:
+        def json(self):
+            return {"response": {"docs": [{"obo_id": "NCIT:C102493", "label": "HDAC9 wt Allele",
+                                           "synonym": ["HDAC"], "ontology_name": "ncit", "iri": ""}]}}
+    monkeypatch.setattr(nz.requests, "get", lambda *a, **k: R())
+    assert nz.EntityResolver(Settings(ontology_provider="ols"))._ols("HDAC") is None
+
+
+def test_clean_drops_abbreviation_parentheses():
+    from bmira.normalize import clean, lookup_key
+    assert clean("histone deacetylase (HDAC)") == "histone deacetylase"
+    assert clean("Interleukin-2 receptor subunit alpha (CD25") == "Interleukin-2 receptor subunit alpha"
+    assert clean("(CD25)") == "CD25" and clean("CD25") == "CD25"
+    assert clean("interleukin-10 (mouse)") == "interleukin-10 (mouse)"      # not an abbreviation
+    assert lookup_key("histone deacetylase (HDAC)") == lookup_key("histone deacetylase")
+
+
+def test_pathway_nodes_join_alias_consolidation():
+    import bmira.normalize as nz
+    r = nz.EntityResolver(Settings(ontology_provider="off"))
+    a, b = r.resolve("histone H3 lysine 9 acetylation"), r.resolve("acetylated histone H3 lysine 9")
+    claims = [_claim("c1", "p", "increases", subj=a.id, obj="LOCAL:b")]       # b is only in a pathway
+    assert nz.consolidate_aliases(claims, r, _FakeLLM(), {}, extra_ids=[b.id]) == 1
+    assert r.canonical(a).id == r.canonical(b).id
+
+
+def test_pair_verdicts_are_matched_by_position_not_echoed_ids():
+    from bmira.schemas import PairAdjudication, PairBatch
+    from bmira.semantic import adjudicate
+
+    class LLM:
+        def structured(self, task, schema, system, user, role="reasoning", ctx=None, n_items=1):
+            assert "[PAIR 1]" in user and "[PAIR 2]" in user
+            return PairBatch(pairs=[PairAdjudication(pair=i + 1, same_finding=True, same_context=True)
+                                    for i in range(n_items)])
+    claims = [_claim(i, "p", "increases") for i in ("C1_0", "C2_0", "C3_0")]
+    cache = {}
+    failed = adjudicate(claims, [("C1_0", "C2_0", .9), ("C1_0", "C3_0", .8)], LLM(), cache)
+    assert failed == 0 and set(cache) == {frozenset(("C1_0", "C2_0")), frozenset(("C1_0", "C3_0"))}
+
+
+def test_method_cues_cover_real_wording():
+    from bmira.evidence import verify_methods
+
+    def run(span, **kw):
+        c = _claim("c", "p", "increases")
+        c.span = span
+        c.comparator_present = kw.pop("comparator", False)
+        for k, v in kw.items():
+            setattr(c, k, v)
+        return verify_methods(c, span)
+    assert run("Provision of butyrate to mice increased Foxp3+ Treg cells in the colon.",
+               perturbation_class="pharmacological").perturbation_class == "pharmacological"
+    assert run("Butyrate at 0.25 mM enhanced Foxp3 expression in CD4+ T cells.",
+               perturbation_class="pharmacological").perturbation_class == "pharmacological"
+    assert run("Butyrate in the absence of TGF-b1 did not lead to Foxp3+ Treg conversion.",
+               comparator=True).comparator_present
+    assert run("While butyrate inhibited HDAC, acetate lacked this activity.", comparator=True).comparator_present
+    assert run("Tbx21−/− CD4+ T cells made less IFN-g after butyrate.",
+               perturbation_class="knockout").perturbation_class == "knockout"
+    assert run("Treg frequency was higher in healthy donors.",
+               perturbation_class="pharmacological").perturbation_class == "none"   # still guarded
+
+
+def test_but_not_phrase_does_not_negate_the_claim():
+    from bmira.normalize import check_claim
+    src = ("We show that butyrate but not pentanoate exerts a concentration-dependent effect on "
+           "Treg and Th17 differentiation.")
+    c = _claim("c", "p", "")
+    c.subject, c.object, c.relation, c.span = "butyrate", "Treg", "exerts a concentration-dependent effect on", src
+    assert check_claim(c, src)[0] == ""
+    src2 = "Treg generation was potentiated by propionate, an HDAC inhibitor, but not acetate."
+    c.subject, c.object, c.relation, c.span = "acetate", "HDAC", "lacks", src2
+    assert check_claim(c, src2) == ("", [])                              # 'lacks' is a null relation
+
+
+def test_entity_names_and_negated_scope_do_not_trigger_overclaim():
+    weak = [_claim("C1", "p", "increases", "weak")]
+    ok = ["Butyrate is associated with more induced regulatory T cells [C1].",
+          "These weak findings do not establish that **gut-produced** butyrate induces colonic Treg [NO_EVIDENCE].",
+          "Experiments would need to test effects on induced [L15] and other regulatory T cells [L16][NO_EVIDENCE]."]
+    for text in ok:
+        assert verify_text(text, weak, [])["overclaims"] == [], text
+    for text in ["Butyrate induced regulatory T cells in mice [C1].", "Butyrate induces IFNG in T cells [C1]."]:
+        assert verify_text(text, weak, [])["overclaims"], text             # real overclaims still caught
+
+
+def test_findings_on_subtypes_support_the_parent_link():
+    parent = pf.link_key("LOCAL:a", "increases", "CL:parent")
+    claims = [_claim("A", "p1", "increases", obj="CL:sub1"), _claim("B", "p2", "increases", obj="CL:sub2"),
+              _claim("N", "p3", "no_effect", obj="CL:sub1")]
+    anc = {"CL:sub1": ("CL:parent",), "CL:sub2": ("CL:parent",)}
+    ln = pf.build_links(claims, {}, {}, {}, Settings(), extra={parent}, ancestors=anc)[parent]
+    assert ln.status == "supported" and ln.n_studies == 2
+    assert ln.n_contra_studies == 0                                        # a subtype null never refutes the parent
+    assert pf.build_links(claims, {}, {}, {}, Settings(), extra={parent})[parent].status != "supported"
+
+
+def test_summary_hides_keys_and_lists_claims_and_links():
+    import json
+    from bmira.telemetry import execute, signals, summarize
+    rt, sc = offline_runtime()
+    rt.settings.ncbi_api_key, rt.settings.ncbi_email = "SECRET-KEY", "me@example.org"
+    final, info = execute(sc["question"], rt, echo=False)
+    m = summarize(final, rt, info)
+    blob = json.dumps(m, default=str)
+    assert "SECRET-KEY" not in blob and "me@example.org" not in blob
+    assert len(m["claims"]) == len(final["claims"])
+    assert {"id", "pmid", "subject", "relation", "object", "grade", "limiting_axis"} <= set(m["claims"][0])
+    assert {"key", "status", "reason", "n_studies", "grade"} <= set(m["links"][0])
+    assert m["normalization"]["duplicate_labels"] == [] and m["comparison"]["pairs_asked"] == len(rt.pair_cache)
+    fired = {s["signal"] for s in signals({"normalization": {"duplicate_labels": ["regulatory t cell"]},
+                                           "comparison": {"pairs_asked": 227, "pairs_judged": 0}})}
+    assert {"one label, several concepts", "pair verdicts lost"} <= fired
+
+
+# L1-L5: problems the other seven questions would hit (found by probing the code, not yet seen live).
+def test_greek_letters_and_charges_keep_entities_apart():
+    from bmira.normalize import local_concept, lookup_key
+    assert lookup_key("IFN-γ") != lookup_key("IFN-α")             # both used to be 'ifn'
+    assert lookup_key("IL-1β") != lookup_key("IL-1α")
+    assert lookup_key("TGF-β1") == lookup_key("TGF-beta1")
+    assert lookup_key("NAD+") == lookup_key("NAD(+)") == lookup_key("NAD⁺")
+    assert local_concept("IFN-γ").id != local_concept("IFN-α").id
+
+
+def test_genotype_notation_is_not_split_into_two_entities():
+    from bmira.normalize import entity_parts
+    assert entity_parts("Tet2−/− bone marrow")[0] == ["Tet2−/− bone marrow"]
+    assert entity_parts("Foxp3-/- mice")[0] == ["Foxp3-/- mice"]
+    assert entity_parts("GPR81/HCAR1")[0] == ["GPR81", "HCAR1"]               # real alternatives still split
+
+
+def test_trial_wording_counts_as_intervention_and_control():
+    from bmira.evidence import verify_methods
+
+    def run(span):
+        c = _claim("c", "p", "decreases", perturbation_class="pharmacological", study_type="human_rct",
+                   system="human_in_vivo")
+        c.span, c.comparator_present = span, True
+        return verify_methods(c, span)
+    for span in ["Patients were randomly assigned to empagliflozin 10 mg or placebo; it reduced hospitalization.",
+                 "Vitamin D3 2000 IU daily reduced autoimmune disease incidence compared with placebo.",
+                 "In a pooled analysis of 5 randomized trials, SGLT2 inhibitors lowered hospitalization.",
+                 "Dapagliflozin reduced worsening heart failure versus usual care."]:
+        c = run(span)
+        assert c.perturbation_class == "pharmacological" and c.comparator_present, (span, c.method_checks)
+
+
+def test_null_findings_contradict_required_and_modulating_steps():
+    null = _claim("n", "p", "no_effect")
+    assert pf._contradicts("required_for", null) and pf._contradicts("sufficient_for", null)
+    assert pf._contradicts("modulates", null)
+    assert not pf._contradicts("required_for", _claim("i", "p", "increases"))
+    assert not pf._contradicts("binds", null)
+    key = pf.link_key("LOCAL:a", "required_for", "LOCAL:b")
+    nulls = [_claim("n1", "p1", "no_effect"), _claim("n2", "p2", "no_effect")]     # moderate, with comparator
+    assert pf.build_links(nulls, {}, {}, {}, Settings(), extra={key})[key].status == "contradicted"
+
+
+def test_pair_verdict_has_no_unused_rationale():
+    from bmira.schemas import PairAdjudication
+    assert "rationale" not in PairAdjudication.model_fields                  # ~100 output tokens per pair
+
+
+# M1-M5: exposure direction ("NAD+ decline", "TET2 loss") and randomized-trial grading.
+def test_loss_words_are_stripped_from_entities_but_not_from_phenotypes():
+    from bmira.normalize import entity_change, entity_of
+    assert entity_of("age-related NAD+ decline")[0] == "NAD+" and entity_change("age-related NAD+ decline") == "down"
+    assert entity_of("Tet2 loss")[0] == "Tet2" and entity_change("Tet2 loss") == "down"
+    assert entity_of("vitamin D deficiency")[0] == "vitamin D"
+    assert entity_of("bone loss")[0] == "bone loss" and entity_change("bone loss") == ""        # a phenotype
+    assert entity_change("Tet2-deficient macrophages") == "" and entity_change("Tet2") == ""     # a cell descriptor
+
+
+def test_parse_strips_exposure_direction_and_keeps_it():
+    from types import SimpleNamespace
+    from bmira.graph import parse
+    from bmira.schemas import ParsedQuestion
+
+    class LLM:
+        def structured(self, task, schema, system, user, role="reasoning", ctx=None, n_items=1):
+            return ParsedQuestion(population_model="macrophages", exposure="age-related NAD+ decline",
+                                  comparator="young", outcome="inflammaging", mechanism_hypothesis="h",
+                                  expected_direction="up")
+    rt = SimpleNamespace(llm=LLM(), resolver=EntityResolver(Settings(ontology_provider="off")))
+    out = parse({"question": "q"}, rt)
+    assert out["parsed"].exposure == "NAD+" and out["parsed"].exposure_change == "down"
+    assert out["exposure"] == rt.resolver.resolve("NAD+").id
+
+
+def test_expected_sign_follows_the_exposure_change():
+    assert pf.pathway_sign("up", "down") == "down" and pf.pathway_sign("down", "down") == "up"
+    assert pf.pathway_sign("up", "up") == "up" and pf.pathway_sign("none", "down") == "none"
+    keys = [pf.link_key("N", "decreases", "I")]                       # NAD+ -| inflammation
+    assert "sign_mismatch" not in pf.logic_check(keys, {}, {}, pf.pathway_sign("up", "down"))[1]
+    assert "sign_mismatch" in pf.logic_check(keys, {}, {}, "up")[1]
+
+
+def test_loss_of_function_claims_are_restated_for_the_bare_entity():
+    from bmira.graph import normalize
+    from bmira.schemas import ParsedQuestion
+    rt, _ = offline_runtime()
+    c = _claim("c1", "p", "")
+    c.subject, c.object, c.relation, c.relation_raw = "Tet2 loss", "IL-6", "increased", "increased"
+    parsed = ParsedQuestion(population_model="m", exposure="Tet2", comparator="c", outcome="o",
+                            mechanism_hypothesis="h")
+    out = normalize({"claims": [c], "parsed": parsed}, rt)["claims"]
+    assert out[0].subject_label == "Tet2" and out[0].relation_norm == "decreases"      # loss increases = Tet2 decreases
+    again = normalize({"claims": out, "parsed": parsed}, rt)["claims"]
+    assert again[0].relation_norm == "decreases"                                       # flipped once, not every round
+
+
+def test_randomized_evidence_can_grade_strong():
+    from bmira.evidence import grade_claim
+
+    def rct(**kw):
+        c = _claim("r", "p", "decreases", study_type="human_rct", system="human_in_vivo",
+                   perturbation_class="pharmacological")
+        c.text_access = "full_text"
+        for k, v in kw.items():
+            setattr(c, k, v)
+        return grade_claim(c, "human")
+    assert rct().grade == "strong"                                       # randomization stands in for a rescue arm
+    assert rct(comparator_present=False).grade != "strong"
+    assert rct(text_access="abstract_only").grade == "moderate"          # the abstract cap still applies
+    assert rct(study_type="meta_analysis").grade == "strong"
+    animal = _claim("a", "p", "decreases", perturbation_class="pharmacological")
+    animal.text_access = "full_text"
+    assert grade_claim(animal, "any").grade == "moderate"                # animal pharmacology unchanged

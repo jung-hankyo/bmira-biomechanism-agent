@@ -52,6 +52,8 @@ def _contradicts(link_rel: str, claim) -> bool:
         return claim.relation_norm in NULL_RELATIONS
     if link_rel in NULL_RELATIONS:
         return st in {"up", "down"}
+    if link_rel in {"required_for", "sufficient_for", "modulates"}:
+        return st == "null"                  # 'GPR81-/- did not change the suppression' refutes 'required for'
     return False
 
 
@@ -74,7 +76,7 @@ def context_of(c) -> tuple:
 
 
 def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, extra=(),
-                discounted=frozenset()) -> dict:
+                discounted=frozenset(), ancestors=None) -> dict:
     """One evidence record per step. Rules that decide what counts:
     R1 reviews never count as independent papers;
     R5 a null result counts against a step only with a comparator and a grade at least as
@@ -82,7 +84,11 @@ def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, e
     R6 an opposing finding triaged as context-dependent is set aside only if the recorded
        contexts really differ AND it comes from a system no closer to humans than the support
        (a contradiction in a more relevant system is never 'just context');
-    R8 Supported needs at least one moderate-or-better claim, not just two papers."""
+    R8 Supported needs at least one moderate-or-better claim, not just two papers;
+    R9 a directional finding about a subtype ('butyrate increases iTreg') also supports the link
+       to its ontology ancestor ('... increases Treg'), as support only: a null or opposite
+       finding in a subtype never counts against the broader link, and the subject never rolls up
+       ('butyrate' evidence is not evidence about 'short-chain fatty acids')."""
     by_pair = defaultdict(list)
     by_id = {c.id: c for c in claims}
     for c in claims:
@@ -97,11 +103,18 @@ def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, e
 
     keys = {link_key(c.subject_concept, c.relation_norm, c.object_concept)
             for cs in by_pair.values() for c in cs} | set(prior) | set(extra)
+    wanted = {n for k in keys for n in (split_key(k)[0], split_key(k)[2])}
+    rolled = defaultdict(list)                                                           # R9
+    for c in claims:
+        if c.relation_norm in DIRECTION:
+            for up in set((ancestors or {}).get(c.object_concept, ())) & wanted - {c.object_concept}:
+                rolled[(c.subject_concept, up)].append(c)
     m, thr = settings.min_studies_per_link, settings.contradiction_threshold
     out = {}
     for key in keys:
         s, r, o = split_key(key)
-        same_pair = by_pair.get((s, o), [])
+        exact = by_pair.get((s, o), [])
+        same_pair = exact + rolled.get((s, o), [])
         support = [c for c in same_pair if c.relation_norm == r]
         sup_ids = {c.id for c in support}
         corro = {c.id: c for c in same_pair if c.id not in sup_ids and _corroborates(r, c)}
@@ -119,7 +132,7 @@ def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, e
         if r in ASSOCIATIVE_RELATIONS and TIER[grade] > 1:
             grade = "weak"                      # an association caps the step, however powered
         contra = []
-        for c in (c for c in same_pair if _contradicts(r, c)):
+        for c in (c for c in exact if _contradicts(r, c)):
             if c.study_type == "review":
                 uncounted[c.id] = "secondary source (review)"                       # R1
             elif any(frozenset((c.id, x.id)) in discounted and context_of(c) != context_of(x)
@@ -189,6 +202,14 @@ def nodes(keys) -> list[str]:
         s, _, o = split_key(k)
         out += [n for n in (s, o) if not out or out[-1] != n]
     return out
+
+
+def pathway_sign(expected: str, exposure_change: str) -> str:
+    """Net direction a correct pathway from the bare exposure must have. 'NAD+ decline -> more
+    inflammaging' is expected 'up' for the decline, so NAD+ itself must act 'down' on it."""
+    if exposure_change == "down" and expected in {"up", "down"}:
+        return "down" if expected == "up" else "up"
+    return expected
 
 
 def logic_check(keys, links, categories, expected: str):

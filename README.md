@@ -146,7 +146,7 @@ All in `bmira/config.py`; the app exposes the round limit.
 | `min_studies_per_link` | 2 | Independent papers needed for a step to be Supported |
 | `n_seed_hypotheses` / `max_hypotheses` | 4 / 6 | Pathways proposed at the start / kept at once |
 | `targets_per_round` / `exploration_slots` | 3 / 1 | Steps searched per round / slots reserved for non-leading pathways |
-| `max_extract_per_round` | 10 | Papers read per round; papers found for a step are read first, the rest wait |
+| `max_extract_per_round` | 20 | Papers read per round; papers found for a step are read first, the rest wait |
 | `max_papers_per_target_query` | 5 | Hits per targeted query (the coverage round takes 20); reading capacity, not search, is the limit |
 | `min_relevance` | 50 | Screening score (0-100) a paper needs to be read; targeted hits are judged against their step |
 | `cheap_tasks` | 9 classification tasks | Tasks routed to the cheap model (screening, entities, relations, aliases, pairs, conflicts, entailment) |
