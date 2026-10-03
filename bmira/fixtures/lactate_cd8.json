@@ -6,13 +6,9 @@
   "exposure": "lactate",
   "comparator": "low lactate",
   "outcome": "CD8 T cell effector function",
+  "outcome_readouts": [],
+  "target_system": "human",
   "mechanism_hypothesis": "lactate -> histone lactylation -> reduced IFNG -> reduced effector function",
-  "entities": [
-   "lactate",
-   "histone lactylation",
-   "IFNG",
-   "CD8 T cell effector function"
-  ],
   "expected_direction": "down"
  },
  "round1_queries": [
@@ -46,13 +42,13 @@
    "Histone lactylation",
    "process"
   ],
-  "ifng expression": [
-   "IFNG expression",
-   "process"
+  "ifng": [
+   "IFNG",
+   "gene_or_protein"
   ],
-  "ifn gamma expression": [
-   "IFN-gamma expression",
-   "process"
+  "ifn gamma": [
+   "IFN-gamma",
+   "gene_or_protein"
   ],
   "cd8 t cell effector function": [
    "CD8 T cell effector function",
@@ -60,10 +56,6 @@
   ],
   "nad+": [
    "NAD+",
-   "chemical"
-  ],
-  "nad+ levels": [
-   "NAD+ levels",
    "chemical"
   ],
   "glycolytic flux": [
@@ -74,9 +66,17 @@
    "Intracellular pH",
    "process"
   ],
-  "gpr81 signaling": [
-   "GPR81 signaling",
-   "process"
+  "gpr81": [
+   "GPR81",
+   "gene_or_protein"
+  ],
+  "cd8 t cell": [
+   "CD8 T cell",
+   "cell_type"
+  ],
+  "tumor cell": [
+   "tumor cell",
+   "cell_type"
   ]
  },
  "alias_groups": [
@@ -85,12 +85,8 @@
    "Lactic acid"
   ],
   [
-   "IFNG expression",
-   "IFN-gamma expression"
-  ],
-  [
-   "NAD+",
-   "NAD+ levels"
+   "IFNG",
+   "IFN-gamma"
   ]
  ],
  "relation_map": {
@@ -195,18 +191,20 @@
      "subject": "lactate",
      "relation": "increased",
      "object": "histone lactylation",
+     "system": "animal_in_vivo",
      "context_cell_type": "CD8 T cell",
      "context_model": "mouse tumor model",
      "perturbation_class": "environmental",
      "comparator_present": true,
-     "span": "In a mouse tumor model, lactate exposure increased histone lactylation in CD8 T cells compared with vehicle controls."
+     "span": "In a mouse tumor model, lactate exposure increased histone lactylation in CD8 T cells compared with vehicle controls.",
+     "methods_span": ""
     }
    ]
   },
   {
    "pmid": "S002",
    "title": "Lactic acid and histone marks",
-   "abstract": "Lactic acid elevated histone lactylation in activated human CD8 T cells relative to untreated cells. Synthetic fixture.",
+   "abstract": "Lactic acid treatment elevated histone lactylation in activated human CD8 T cells relative to untreated cells. Synthetic fixture.",
    "keywords": [
     "lactate histone lactylation"
    ],
@@ -217,18 +215,20 @@
      "subject": "lactic acid",
      "relation": "elevated",
      "object": "histone lactylation",
+     "system": "human_primary_cells",
      "context_cell_type": "CD8 T cell",
      "context_model": "primary human T cells",
      "perturbation_class": "environmental",
      "comparator_present": true,
-     "span": "Lactic acid elevated histone lactylation in activated human CD8 T cells relative to untreated cells."
+     "span": "Lactic acid treatment elevated histone lactylation in activated human CD8 T cells relative to untreated cells.",
+     "methods_span": ""
     }
    ]
   },
   {
    "pmid": "S003",
    "title": "Lactylation and IFNG",
-   "abstract": "Histone lactylation repressed IFNG expression in a CD8 T cell line. Synthetic fixture.",
+   "abstract": "Histone lactylation repressed IFNG expression in a CD8 T cell line compared with controls after knockdown of the lactylation writer. Synthetic fixture.",
    "keywords": [
     "lactate cd8 t cell effector"
    ],
@@ -239,18 +239,20 @@
      "subject": "histone lactylation",
      "relation": "repressed",
      "object": "IFNG expression",
+     "system": "cell_line",
      "context_cell_type": "CD8 T cell",
      "context_model": "T cell line",
      "perturbation_class": "knockdown",
      "comparator_present": true,
-     "span": "Histone lactylation repressed IFNG expression in a CD8 T cell line."
+     "span": "Histone lactylation repressed IFNG expression in a CD8 T cell line compared with controls after knockdown of the lactylation writer.",
+     "methods_span": ""
     }
    ]
   },
   {
    "pmid": "S004",
    "title": "IFN-gamma and effector function",
-   "abstract": "IFN-gamma expression supported CD8 T cell effector function in mouse tumor models. Synthetic fixture.",
+   "abstract": "IFN-gamma expression supported CD8 T cell effector function in mouse tumor models, with knockout mice showing lower cytotoxicity compared with wild-type. Synthetic fixture.",
    "keywords": [
     "lactate cd8 t cell effector"
    ],
@@ -261,18 +263,20 @@
      "subject": "IFN-gamma expression",
      "relation": "supported",
      "object": "CD8 T cell effector function",
+     "system": "animal_in_vivo",
      "context_cell_type": "CD8 T cell",
      "context_model": "mouse tumor model",
      "perturbation_class": "knockout",
      "comparator_present": true,
-     "span": "IFN-gamma expression supported CD8 T cell effector function in mouse tumor models."
+     "span": "IFN-gamma expression supported CD8 T cell effector function in mouse tumor models, with knockout mice showing lower cytotoxicity compared with wild-type.",
+     "methods_span": ""
     }
    ]
   },
   {
    "pmid": "S005",
    "title": "Lactate and NAD+ in tumor T cells",
-   "abstract": "Lactate depleted NAD+ in CD8 T cells isolated from mouse tumors. Synthetic fixture.",
+   "abstract": "Lactate exposure depleted NAD+ in CD8 T cells isolated from mouse tumors compared with controls. Synthetic fixture.",
    "keywords": [
     "t cell metabolism nad+"
    ],
@@ -283,18 +287,20 @@
      "subject": "lactate",
      "relation": "depleted",
      "object": "NAD+",
+     "system": "animal_cells",
      "context_cell_type": "CD8 T cell",
-     "context_model": "mouse tumor model",
+     "context_model": "mouse tumor T cells",
      "perturbation_class": "environmental",
      "comparator_present": true,
-     "span": "Lactate depleted NAD+ in CD8 T cells isolated from mouse tumors."
+     "span": "Lactate exposure depleted NAD+ in CD8 T cells isolated from mouse tumors compared with controls.",
+     "methods_span": ""
     }
    ]
   },
   {
    "pmid": "S006",
    "title": "Redox state of human CD8 T cells",
-   "abstract": "Lactate lowered NAD+ levels in human CD8 T cells cultured with tumor-conditioned medium. Synthetic fixture.",
+   "abstract": "Lactate treatment lowered NAD+ levels in human CD8 T cells relative to untreated cells. Synthetic fixture.",
    "keywords": [
     "t cell metabolism nad+"
    ],
@@ -305,18 +311,20 @@
      "subject": "lactate",
      "relation": "lowered",
      "object": "NAD+ levels",
+     "system": "human_primary_cells",
      "context_cell_type": "CD8 T cell",
      "context_model": "primary human T cells",
      "perturbation_class": "environmental",
      "comparator_present": true,
-     "span": "Lactate lowered NAD+ levels in human CD8 T cells cultured with tumor-conditioned medium."
+     "span": "Lactate treatment lowered NAD+ levels in human CD8 T cells relative to untreated cells.",
+     "methods_span": ""
     }
    ]
   },
   {
    "pmid": "S007",
    "title": "Acidification of tumor cells",
-   "abstract": "Lactic acid reduced intracellular pH in tumor cells. Synthetic fixture.",
+   "abstract": "Lactic acid exposure reduced intracellular pH in tumor cells compared with controls. Synthetic fixture.",
    "keywords": [
     "lactate cd8 t cell effector"
    ],
@@ -327,11 +335,13 @@
      "subject": "lactic acid",
      "relation": "reduced",
      "object": "intracellular pH",
+     "system": "cell_line",
      "context_cell_type": "tumor cell",
      "context_model": "tumor cell line",
      "perturbation_class": "environmental",
      "comparator_present": true,
-     "span": "Lactic acid reduced intracellular pH in tumor cells."
+     "span": "Lactic acid exposure reduced intracellular pH in tumor cells compared with controls.",
+     "methods_span": ""
     }
    ]
   },
@@ -349,11 +359,13 @@
      "subject": "lactate",
      "relation": "increased",
      "object": "CD8 T cell effector function",
+     "system": "animal_in_vivo",
      "context_cell_type": "CD8 T cell",
      "context_model": "",
      "perturbation_class": "environmental",
      "comparator_present": true,
-     "span": "Lactate increased CD8 T cell effector function in all tested conditions."
+     "span": "Lactate increased CD8 T cell effector function in all tested conditions.",
+     "methods_span": ""
     }
    ],
    "publication_types": [
@@ -375,18 +387,20 @@
      "subject": "lactate",
      "relation": "abolished",
      "object": "CD8 T cell effector function",
+     "system": "human_in_vivo",
      "context_cell_type": "CD8 T cell",
      "context_model": "",
      "perturbation_class": "environmental",
      "comparator_present": true,
-     "span": "Lactate abolished CD8 T cell effector function through histone lactylation in all models."
+     "span": "Lactate abolished CD8 T cell effector function through histone lactylation in all models.",
+     "methods_span": ""
     }
    ]
   },
   {
    "pmid": "S010",
    "title": "NAD+ and glycolysis",
-   "abstract": "Restoring NAD+ increased glycolytic flux in CD8 T cells. Synthetic fixture.",
+   "abstract": "NAD+ supplementation increased glycolytic flux in mouse CD8 T cells compared with vehicle. The effect was validated with an independent genetic approach. Synthetic fixture.",
    "keywords": [
     "nad+ glycolytic flux"
    ],
@@ -397,11 +411,13 @@
      "subject": "NAD+",
      "relation": "increased",
      "object": "glycolytic flux",
+     "system": "animal_cells",
      "context_cell_type": "CD8 T cell",
      "context_model": "mouse T cells",
      "perturbation_class": "pharmacological",
      "comparator_present": true,
-     "span": "Restoring NAD+ increased glycolytic flux in CD8 T cells.",
+     "span": "NAD+ supplementation increased glycolytic flux in mouse CD8 T cells compared with vehicle.",
+     "methods_span": "The effect was validated with an independent genetic approach.",
      "orthogonal_validation": true
     }
    ]
@@ -409,7 +425,7 @@
   {
    "pmid": "S011",
    "title": "NAD+ supplementation in human T cells",
-   "abstract": "NAD+ supplementation enhanced glycolytic flux in human CD8 T cells. Synthetic fixture.",
+   "abstract": "NAD+ supplementation enhanced glycolytic flux in human CD8 T cells compared with vehicle controls. Synthetic fixture.",
    "keywords": [
     "nad+ glycolytic flux"
    ],
@@ -420,20 +436,23 @@
      "subject": "NAD+",
      "relation": "enhanced",
      "object": "glycolytic flux",
+     "system": "human_primary_cells",
      "context_cell_type": "CD8 T cell",
      "context_model": "primary human T cells",
      "perturbation_class": "pharmacological",
      "comparator_present": true,
-     "span": "NAD+ supplementation enhanced glycolytic flux in human CD8 T cells.",
-     "orthogonal_validation": true
+     "span": "NAD+ supplementation enhanced glycolytic flux in human CD8 T cells compared with vehicle controls.",
+     "methods_span": "Methods: NAD+ precursor treatment was validated with an independent genetic rescue.",
+     "orthogonal_validation": true,
+     "rescue_arm": true
     }
    ],
-   "full_text": "NAD+ supplementation enhanced glycolytic flux in human CD8 T cells. Methods: NAD+ precursor treatment with an independent genetic rescue. Synthetic fixture full text."
+   "full_text": "NAD+ supplementation enhanced glycolytic flux in human CD8 T cells compared with vehicle controls. Methods: NAD+ precursor treatment was validated with an independent genetic rescue. Synthetic fixture full text."
   },
   {
    "pmid": "S012",
    "title": "Glycolysis supports effector function",
-   "abstract": "Higher glycolytic flux enhanced CD8 T cell effector function in mouse tumor models. Synthetic fixture.",
+   "abstract": "Higher glycolytic flux enhanced CD8 T cell effector function in mouse tumor models compared with knockdown controls. Synthetic fixture.",
    "keywords": [
     "glycolytic flux cd8 t cell effector function"
    ],
@@ -444,18 +463,20 @@
      "subject": "glycolytic flux",
      "relation": "enhanced",
      "object": "CD8 T cell effector function",
+     "system": "animal_in_vivo",
      "context_cell_type": "CD8 T cell",
      "context_model": "mouse tumor model",
      "perturbation_class": "knockdown",
      "comparator_present": true,
-     "span": "Higher glycolytic flux enhanced CD8 T cell effector function in mouse tumor models."
+     "span": "Higher glycolytic flux enhanced CD8 T cell effector function in mouse tumor models compared with knockdown controls.",
+     "methods_span": ""
     }
    ]
   },
   {
    "pmid": "S013",
    "title": "Glycolysis in human TILs",
-   "abstract": "Glycolytic flux enhanced CD8 T cell effector function in human tumor-infiltrating lymphocytes. Synthetic fixture.",
+   "abstract": "Glycolytic flux enhanced CD8 T cell effector function in human tumor-infiltrating lymphocytes, as shown by siRNA knockdown versus scrambled controls. Synthetic fixture.",
    "keywords": [
     "glycolytic flux cd8 t cell effector function"
    ],
@@ -466,20 +487,22 @@
      "subject": "glycolytic flux",
      "relation": "enhanced",
      "object": "CD8 T cell effector function",
+     "system": "human_primary_cells",
      "context_cell_type": "CD8 T cell",
      "context_model": "human TILs",
      "perturbation_class": "knockdown",
      "comparator_present": true,
-     "span": "Glycolytic flux enhanced CD8 T cell effector function in human tumor-infiltrating lymphocytes."
+     "span": "Glycolytic flux enhanced CD8 T cell effector function in human tumor-infiltrating lymphocytes, as shown by siRNA knockdown versus scrambled controls.",
+     "methods_span": ""
     }
    ]
   },
   {
    "pmid": "S014",
    "title": "No effect of lactylation on IFNG",
-   "abstract": "Histone lactylation did not change IFNG expression in primary human CD8 T cells. Synthetic fixture.",
+   "abstract": "Histone lactylation did not change IFNG expression in primary human CD8 T cells after knockout of the lactylation writer compared with controls. Synthetic fixture.",
    "keywords": [
-    "histone lactylation ifng expression"
+    "histone lactylation ifng"
    ],
    "study_type": "human_primary",
    "claims": [
@@ -488,20 +511,22 @@
      "subject": "histone lactylation",
      "relation": "did not change",
      "object": "IFNG expression",
+     "system": "human_primary_cells",
      "context_cell_type": "CD8 T cell",
      "context_model": "primary human T cells",
      "perturbation_class": "knockout",
      "comparator_present": true,
-     "span": "Histone lactylation did not change IFNG expression in primary human CD8 T cells."
+     "span": "Histone lactylation did not change IFNG expression in primary human CD8 T cells after knockout of the lactylation writer compared with controls.",
+     "methods_span": ""
     }
    ]
   },
   {
    "pmid": "S015",
    "title": "Lactylation raises IFNG",
-   "abstract": "Histone lactylation increased IFNG expression in mouse CD8 T cells. Synthetic fixture.",
+   "abstract": "Histone lactylation increased IFNG expression in mouse CD8 T cells compared with knockout controls. Synthetic fixture.",
    "keywords": [
-    "histone lactylation ifng expression"
+    "histone lactylation ifng"
    ],
    "study_type": "animal",
    "claims": [
@@ -510,18 +535,20 @@
      "subject": "histone lactylation",
      "relation": "increased",
      "object": "IFNG expression",
+     "system": "animal_cells",
      "context_cell_type": "CD8 T cell",
      "context_model": "mouse T cells",
      "perturbation_class": "knockout",
      "comparator_present": true,
-     "span": "Histone lactylation increased IFNG expression in mouse CD8 T cells."
+     "span": "Histone lactylation increased IFNG expression in mouse CD8 T cells compared with knockout controls.",
+     "methods_span": ""
     }
    ]
   },
   {
    "pmid": "S016",
    "title": "pH and effector function",
-   "abstract": "Intracellular pH positively regulated CD8 T cell effector function in mouse T cells. Synthetic fixture.",
+   "abstract": "Intracellular pH positively regulated CD8 T cell effector function in mouse T cells compared with acidified controls. Synthetic fixture.",
    "keywords": [
     "intracellular ph cd8 t cell effector function"
    ],
@@ -532,20 +559,22 @@
      "subject": "intracellular pH",
      "relation": "positively regulated",
      "object": "CD8 T cell effector function",
+     "system": "animal_cells",
      "context_cell_type": "CD8 T cell",
      "context_model": "mouse T cells",
      "perturbation_class": "environmental",
      "comparator_present": true,
-     "span": "Intracellular pH positively regulated CD8 T cell effector function in mouse T cells."
+     "span": "Intracellular pH positively regulated CD8 T cell effector function in mouse T cells compared with acidified controls.",
+     "methods_span": ""
     }
    ]
   },
   {
    "pmid": "S017",
    "title": "IFNG expression and effector function",
-   "abstract": "IFNG expression increased CD8 T cell effector function in human T cells. Synthetic fixture.",
+   "abstract": "IFNG expression increased CD8 T cell effector function in human T cells compared with knockdown controls. Synthetic fixture.",
    "keywords": [
-    "ifng expression cd8 t cell effector function"
+    "ifng cd8 t cell effector function"
    ],
    "study_type": "human_primary",
    "claims": [
@@ -554,12 +583,66 @@
      "subject": "IFNG expression",
      "relation": "increased",
      "object": "CD8 T cell effector function",
+     "system": "human_primary_cells",
      "context_cell_type": "CD8 T cell",
      "context_model": "primary human T cells",
      "perturbation_class": "knockdown",
      "comparator_present": true,
-     "span": "IFNG expression increased CD8 T cell effector function in human T cells."
+     "span": "IFNG expression increased CD8 T cell effector function in human T cells compared with knockdown controls.",
+     "methods_span": ""
     }
+   ]
+  },
+  {
+   "pmid": "S018",
+   "title": "GPR81 in tumor cells",
+   "abstract": "Lactate increased GPR81 expression in tumor cells compared with controls. Synthetic fixture.",
+   "keywords": [
+    "lactate cd8 t cell effector"
+   ],
+   "study_type": "cell_line",
+   "claims": [
+    {
+     "claim_type": "observation",
+     "subject": "lactate",
+     "relation": "did not change",
+     "object": "GPR81 expression",
+     "system": "cell_line",
+     "context_cell_type": "tumor cell",
+     "context_model": "",
+     "perturbation_class": "environmental",
+     "comparator_present": true,
+     "span": "Lactate increased GPR81 expression in tumor cells compared with controls.",
+     "methods_span": ""
+    }
+   ]
+  },
+  {
+   "pmid": "S019",
+   "title": "Review: lactate and T cell metabolism",
+   "abstract": "Reviewed studies report that lactate reduced NAD+ in CD8 T cells compared with controls. Synthetic fixture.",
+   "keywords": [
+    "t cell metabolism nad+"
+   ],
+   "study_type": "review",
+   "claims": [
+    {
+     "claim_type": "observation",
+     "subject": "lactate",
+     "relation": "reduced",
+     "object": "NAD+",
+     "system": "unclear",
+     "context_cell_type": "CD8 T cell",
+     "context_model": "",
+     "perturbation_class": "none",
+     "comparator_present": true,
+     "span": "Reviewed studies report that lactate reduced NAD+ in CD8 T cells compared with controls.",
+     "methods_span": ""
+    }
+   ],
+   "publication_types": [
+    "Journal Article",
+    "Review"
    ]
   }
  ]

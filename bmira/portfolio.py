@@ -7,9 +7,10 @@ gated expansion (in graph.py) ask the LLM.
 import math
 from collections import defaultdict
 
-from bmira.evidence import stance
+from bmira.evidence import SYSTEM_RANK, stance
+from bmira.normalize import split_attribute
 from bmira.schemas import (ASSOCIATIVE_RELATIONS, DIRECTION, NULL_RELATIONS, RELATION_SET,
-                           TIER, Hypothesis, LinkEvidence)
+                           SYSTEM_GROUP, TIER, Hypothesis, LinkEvidence)
 
 QUALITY = {"ungraded": 0.0, "weak": 0.4, "moderate": 0.7, "strong": 1.0}
 SIGNED = {"increases": 1, "decreases": -1, "required_for": 1, "sufficient_for": 1}
@@ -62,10 +63,25 @@ def _corroborates(link_rel: str, claim) -> bool:
     return False
 
 
+def _relevance(c) -> int:
+    return SYSTEM_RANK.get(SYSTEM_GROUP.get(c.system, ""), 0)
+
+
+def context_of(c) -> tuple:
+    """Recorded context of a claim: (system group, normalized cell type)."""
+    return (SYSTEM_GROUP.get(c.system, "unclear"), c.context_concept or c.context)
+
+
 def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, extra=(),
                 discounted=frozenset()) -> dict:
-    """`discounted` holds claim-id pairs whose conflict was judged context-dependent or not
-    comparable: such a claim is listed on the link but does not count against it."""
+    """One evidence record per step. Rules that decide what counts:
+    R1 reviews never count as independent papers;
+    R5 a null result counts against a step only with a comparator and a grade at least as
+       high as the best support;
+    R6 an opposing finding triaged as context-dependent is set aside only if the recorded
+       contexts really differ AND it comes from a system no closer to humans than the support
+       (a contradiction in a more relevant system is never 'just context');
+    R8 Supported needs at least one moderate-or-better claim, not just two papers."""
     by_pair = defaultdict(list)
     by_id = {c.id: c for c in claims}
     for c in claims:
@@ -80,58 +96,76 @@ def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, e
 
     keys = {link_key(c.subject_concept, c.relation_norm, c.object_concept)
             for cs in by_pair.values() for c in cs} | set(prior) | set(extra)
-    m = settings.min_studies_per_link
+    m, thr = settings.min_studies_per_link, settings.contradiction_threshold
     out = {}
     for key in keys:
         s, r, o = split_key(key)
         same_pair = by_pair.get((s, o), [])
         support = [c for c in same_pair if c.relation_norm == r]
         sup_ids = {c.id for c in support}
-        opposing = [c for c in same_pair if _contradicts(r, c)]
-        ctx_dep = [c for c in opposing if any(frozenset((c.id, i)) in discounted for i in sup_ids)]
-        contra = [c for c in opposing if c not in ctx_dep]
         corro = {c.id: c for c in same_pair if c.id not in sup_ids and _corroborates(r, c)}
-        for c in support:                       # semantic partners judged same question+endpoint
+        for c in support:                       # semantic partners judged to report the same finding
             for pid in partners[c.id]:
                 other = by_id.get(pid)
                 if other and pid not in sup_ids and _corroborates(r, other):
                     corro[pid] = other
-        papers = {c.pmid for c in support} | {c.pmid for c in corro.values()}
-        contra_papers = {c.pmid for c in contra} - {c.pmid for c in support}
-        grade = max((c.grade for c in support), key=TIER.get, default="ungraded")
+        uncounted = {}
+        primary = [c for c in support if c.study_type != "review"]
+        for c in support + list(corro.values()):
+            if c.study_type == "review":
+                uncounted[c.id] = "secondary source (review)"                       # R1
+        grade = max((c.grade for c in primary), key=TIER.get, default="ungraded")
         if r in ASSOCIATIVE_RELATIONS and TIER[grade] > 1:
-            grade = "weak"                      # an association caps the link, however powered
+            grade = "weak"                      # an association caps the step, however powered
+        contra = []
+        for c in (c for c in same_pair if _contradicts(r, c)):
+            if c.study_type == "review":
+                uncounted[c.id] = "secondary source (review)"                       # R1
+            elif any(frozenset((c.id, x.id)) in discounted and context_of(c) != context_of(x)
+                     and _relevance(c) <= _relevance(x) for x in support):
+                uncounted[c.id] = "different context (triaged as context-dependent)"  # R6
+            elif stance(c) == "null" and not (c.comparator_present and TIER[c.grade] >= TIER[grade]):
+                uncounted[c.id] = "null result weaker than the support"            # R5
+            else:
+                contra.append(c)
+        papers = {c.pmid for c in primary} | {c.pmid for c in corro.values() if c.study_type != "review"}
+        contra_papers = {c.pmid for c in contra} - {c.pmid for c in support}
         contra_grade = max((c.grade for c in contra), key=TIER.get, default="ungraded")
         total = len(papers) + len(contra_papers)
         share = len(contra_papers) / total if total else 0.0
         old = prior.get(key)
         exhausted = old.exhausted if old else False
-        if contra_papers and share >= settings.contradiction_threshold and TIER[contra_grade] >= 2:
-            status, reason = "contradicted", f"{len(contra_papers)} contradicting vs {len(papers)} supporting papers"
-        elif support and len(papers) >= m and share < settings.contradiction_threshold:
+        searches = old.zero_yield_count if old else 0
+        if contra_papers and share >= thr and TIER[contra_grade] >= 2:
+            status, reason = "contradicted", f"{len(contra_papers)} opposing vs {len(papers)} supporting papers"
+        elif papers and len(papers) >= m and share < thr and TIER[grade] >= 2:
             status, reason = "supported", f"{len(papers)} papers, best grade {grade}"
-        elif exhausted:
-            status, reason = "insufficient", "no study found after repeated searches"
-        elif not support:
-            status, reason = "insufficient", "not found yet"
-        elif share >= settings.contradiction_threshold:
+        elif papers and len(papers) >= m and share < thr:
+            status, reason = "insufficient", f"only weak evidence ({len(papers)} papers)"           # R8
+        elif not papers and support:
+            status, reason = "insufficient", "only secondary sources (reviews)"
+        elif not papers:
+            status, reason = ("insufficient", f"no study found in {searches} targeted searches"
+                              if exhausted else f"not found in {searches} targeted search"
+                              + ("es" if searches != 1 else "") if searches else "not found yet")
+        elif share >= thr:
             status, reason = "insufficient", "weak evidence on both sides"
         else:
-            status, reason = "insufficient", f"{len(papers)} of {m} required papers"
+            status, reason = "insufficient", f"{len(papers)} of {m} required papers" + (
+                "; targeted searches found no more" if exhausted else "")
         out[key] = LinkEvidence(
             key=key, subject=s, relation=r, object=o,
             subject_label=labels.get(s, old.subject_label if old else s),
             object_label=labels.get(o, old.object_label if old else o),
             support_ids=sorted(sup_ids), corroborating_ids=sorted(corro),
-            contradicting_ids=sorted(c.id for c in contra),
-            context_dependent_ids=sorted(c.id for c in ctx_dep), n_studies=len(papers),
-            n_contra_studies=len(contra_papers), grade=grade, contra_grade=contra_grade,
-            contradiction_share=round(share, 3),
+            contradicting_ids=sorted(c.id for c in contra), uncounted=uncounted,
+            n_studies=len(papers), n_contra_studies=len(contra_papers), grade=grade,
+            contra_grade=contra_grade, contradiction_share=round(share, 3),
             completeness=round(min(1.0, len(papers) / m) * QUALITY[grade] * (1 - share), 3)
-            if support else 0.0,
-            status=status, reason=reason, contexts=sorted({c.context for c in support}),
-            times_targeted=old.times_targeted if old else 0,
-            zero_yield_count=old.zero_yield_count if old else 0, exhausted=exhausted)
+            if papers else 0.0,
+            status=status, reason=reason, contexts=sorted({context_of(c)[1] for c in primary}),
+            times_targeted=old.times_targeted if old else 0, zero_yield_count=searches,
+            exhausted=exhausted)
     return out
 
 
@@ -141,7 +175,8 @@ def proposal_keys(pathway, resolver) -> tuple[list[str], dict]:
     for ln in pathway.links:
         if ln.relation not in RELATION_SET - {"unresolved"}:
             continue
-        s, o = resolver.resolve(ln.source), resolver.resolve(ln.target)
+        # same entity/attribute split as claims, or 'IFNG expression' would miss node 'IFNG'
+        s, o = resolver.resolve(split_attribute(ln.source)[0]), resolver.resolve(split_attribute(ln.target)[0])
         labels[s.id], labels[o.id] = s.label, o.label
         keys.append(link_key(s.id, ln.relation, o.id))
     return keys, labels

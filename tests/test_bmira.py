@@ -17,11 +17,12 @@ def offline():
     return rt, run(sc["question"], rt)
 
 
-def _claim(i, pmid, rel, grade="moderate", subj="LOCAL:a", obj="LOCAL:b", ctx="cd8"):
+def _claim(i, pmid, rel, grade="moderate", subj="LOCAL:a", obj="LOCAL:b", ctx="cd8",
+           system="animal_cells", study_type="animal", **kw):
     return Claim(id=i, pmid=pmid, claim_type="observation", subject="a", relation=rel, object="b",
-                 span="x" * 30, study_type="animal", text_access="abstract_only",
+                 span="x" * 30, study_type=study_type, text_access="abstract_only", system=system,
                  subject_concept=subj, object_concept=obj, relation_norm=rel, grade=grade,
-                 context_cell_type=ctx)
+                 context_cell_type=ctx, comparator_present=True, **kw)
 
 
 # P0: the whole graph runs offline and the report passes its own verification.
@@ -95,12 +96,33 @@ def test_link_aggregation():
     g1 = pf.build_links(strong, {}, {}, labels, s)[k].grade
     g2 = pf.build_links(strong + [_claim("c3", "p3", "increases", "weak")], {}, {}, labels, s)[k].grade
     assert g1 == g2 == "strong"
-    contra = strong[:1] + [_claim("c4", "p4", "decreases"), _claim("c5", "p5", "no_effect")]
+    contra = strong[:1] + [_claim("c4", "p4", "decreases", "strong"), _claim("c5", "p5", "no_effect", "strong")]
     assert pf.build_links(contra, {}, {}, labels, s)[k].status == "contradicted"
-    # the same opposing findings, judged context-dependent by conflict triage, do not count
-    ctx = {frozenset(("c1", "c4")), frozenset(("c1", "c5"))}
-    ln = pf.build_links(contra, {}, {}, labels, s, discounted=ctx)[k]
-    assert ln.status == "insufficient" and ln.context_dependent_ids == ["c4", "c5"]
+    # R6: triaged 'context-dependent' sets opposing claims aside only if contexts truly differ...
+    tri = {frozenset(("c1", "c4")), frozenset(("c1", "c5"))}
+    assert pf.build_links(contra, {}, {}, labels, s, discounted=tri)[k].status == "contradicted"
+    other = strong[:1] + [_claim("c4", "p4", "decreases", "strong", ctx="tumor"),
+                          _claim("c5", "p5", "no_effect", "strong", ctx="tumor")]
+    ln = pf.build_links(other, {}, {}, labels, s, discounted=tri)[k]
+    assert set(ln.uncounted) == {"c4", "c5"} and ln.status != "contradicted"
+    # ...and never when the opposing evidence is closer to humans than the support
+    human = strong[:1] + [_claim("c4", "p4", "decreases", "strong", ctx="tumor", system="human_primary_cells"),
+                          _claim("c5", "p5", "no_effect", "strong", ctx="tumor", system="human_primary_cells")]
+    assert pf.build_links(human, {}, {}, labels, s, discounted=tri)[k].status == "contradicted"
+
+
+def test_evidence_floor_and_null_asymmetry():
+    s, k = Settings(), pf.link_key("LOCAL:a", "increases", "LOCAL:b")
+    weak = [_claim("c1", "p1", "increases", "weak"), _claim("c2", "p2", "increases", "weak")]
+    ln = pf.build_links(weak, {}, {}, {}, s)[k]
+    assert ln.status == "insufficient" and "only weak" in ln.reason            # R8
+    strong = [_claim("c1", "p1", "increases", "strong"), _claim("c2", "p2", "increases", "strong")]
+    nulls = [_claim("c3", "p3", "no_effect", "moderate"), _claim("c4", "p4", "no_effect", "moderate")]
+    ln = pf.build_links(strong + nulls, {}, {}, {}, s)[k]
+    assert ln.status == "supported" and set(ln.uncounted) == {"c3", "c4"}     # R5
+    review = [_claim("c5", "p5", "increases", "weak", study_type="review")]
+    ln = pf.build_links(strong[:1] + review, {}, {}, {}, s)[k]
+    assert ln.n_studies == 1 and "c5" in ln.uncounted                          # R1
 
 
 # P5: negation-aware verbs; tags required.
@@ -109,6 +131,65 @@ def test_verification():
     c = _claim("C1", "p1", "associated_with", "moderate")
     v = verify_text("Lactate drives IFNG loss in T cells [C1].", [c], ["H1"])
     assert v["overclaims"] and v["missing_tags"] == ["H1"]
+
+
+def test_claim_checks():
+    from bmira.normalize import check_claim
+    src = "Lactate increased GPR81 expression in tumor cells compared with controls."
+    c = _claim("c", "p", "")
+    c.span, c.subject, c.object = src, "lactate", "GPR81 expression"
+    c.relation = "did not change"
+    assert check_claim(c, src)[0] == "null claim but the quote reports an effect"
+    c.relation, c.object = "increased", "IFNG"
+    assert check_claim(c, src)[0] == "object not named in quote"
+    neg = "Lactate did not increase GPR81 expression in tumor cells compared with controls."
+    c.span, c.object = neg, "GPR81"
+    assert check_claim(c, neg)[0] == "quote negates the claimed effect"
+    fabricated = "Lactate had no effect on GPR81 expression in tumor cells compared with controls."
+    assert not span_is_anchored(fabricated, fabricated.replace("no effect", "an effect"))
+
+
+def test_method_and_design_rules():
+    from bmira.evidence import claim_study_type, grade_claim, verify_methods
+    from bmira.sources import study_type_from_pubtypes
+    c = _claim("c", "p", "increases", perturbation_class="knockout", rescue_arm=True)
+    c.span = "Lactate increased IFNG in mouse T cells."               # no knockout, rescue or control
+    c.comparator_present = True
+    verify_methods(c, c.span)
+    assert c.perturbation_class == "none" and not c.rescue_arm and not c.comparator_present
+    assert claim_study_type("animal", None, "human_primary_cells") == "human_primary"   # mixed paper
+    assert claim_study_type("human_primary", None, "animal_in_vivo") == "animal"
+    assert study_type_from_pubtypes(["Systematic Review"]) == "review"
+    # design forced to 3 so only the indirectness rule can cap this mouse in vivo claim
+    strong = _claim("s", "p", "increases", system="animal_in_vivo", study_type="human_primary",
+                    perturbation_class="knockout", rescue_arm=True)
+    strong.text_access = "full_text"
+    assert grade_claim(strong, "human").grade == "moderate" and "indirect_system" in strong.grade_detail["caps"]
+
+
+def test_attribute_split_and_sections():
+    import xml.etree.ElementTree as ET
+    from bmira.normalize import split_attribute
+    from bmira.sources import sectioned_text
+    assert split_attribute("IFNG expression") == ("IFNG", "expression")
+    assert split_attribute("NAD+ levels") == ("NAD+", "amount")
+    assert split_attribute("T cell activation") == ("T cell activation", "none")
+    body = ET.fromstring("<body><sec><title>Methods</title><p>M</p></sec><sec><title>Results</title>"
+                         "<p>R</p><fig><caption>Fig 1 legend</caption></fig></sec></body>")
+    text = sectioned_text("abs", body, 1000)
+    assert text.index("RESULTS: R") < text.index("FIGURE LEGENDS") < text.index("METHODS: M")
+
+
+def test_run_applies_evidence_rules(offline):
+    _, final = offline
+    dropped = {c.pmid: c.drop_reason for c in final["dropped_claims"]}
+    assert dropped["S018"] == "null claim but the quote reports an effect"
+    nad = next(ln for ln in final["links"].values()
+               if ln.subject_label == "Lactate" and ln.object_label == "NAD+" and ln.relation == "decreases")
+    assert nad.n_studies == 2 and any("review" in r for r in nad.uncounted.values())
+    for p in final["papers"]:                                  # R7: every targeted hit was read for its step
+        if p.screen_status == "included":
+            assert set(p.retrieved_for) <= set(p.read_for)
 
 
 def test_top_k_cap():

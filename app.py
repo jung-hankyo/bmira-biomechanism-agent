@@ -120,8 +120,8 @@ def render(m, i):
 
 # ── conversation ────────────────────────────────────────────────────────────
 if not ss.messages:
-    st.markdown(f"### Ask a mechanism question\nB-MiRA searches the literature, builds an evidence "
-                f"graph, and weighs several candidate pathways against each other.")
+    st.markdown("### Ask a mechanism question\nB-MiRA searches the literature, builds an evidence "
+                "graph, and weighs several candidate pathways against each other.")
     if not live:
         st.info(f"Offline demo: whatever you type, the synthetic scenario runs: *{DEMO_QUESTION}*")
 

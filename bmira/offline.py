@@ -129,14 +129,14 @@ class SurrogateLLM:
 
     def _pair(self, ctx):
         return PairBatch(pairs=[PairAdjudication(
-            claim_a=a.id, claim_b=b.id, same_context=a.context == b.context,
+            claim_a=a.id, claim_b=b.id, same_context=(a.system, a.context_concept) == (b.system, b.context_concept),
             same_finding=(a.subject_concept, a.object_concept) == (b.subject_concept, b.object_concept))
             for a, b in ctx["pairs"]])
 
     def _conflict(self, ctx):
         out = []
         for fam, claims in ctx["candidates"]:
-            ctxs = {c.context for c in claims}
+            ctxs = {(c.system, c.context_concept) for c in claims}
             out.append(Conflict(cluster_key=fam.key,
                                 verdict="true_conflict" if len(ctxs) == 1 else "context_dependent",
                                 explanation=f"{len(claims)} claims, contexts {sorted(ctxs)}",

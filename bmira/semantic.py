@@ -1,6 +1,7 @@
 """Claim-level semantic comparison: embeddings propose pairs, the LLM judges them,
 code builds complete-linkage families and conflict candidates. Verdicts are cached by
 claim pair, so each pair is judged once per run."""
+import re
 from collections import defaultdict
 from functools import lru_cache
 
@@ -33,12 +34,24 @@ def claim_text(c) -> str:
             f"context {c.context_cell_type or 'unspecified'} {c.context_model or ''}")
 
 
+STEM_STOP = {"cell", "cells", "human", "mouse", "protein", "gene", "level", "levels", "expression",
+             "activity", "function", "signaling", "tumor", "tumour"}
+
+
+def _block_keys(concept: str, parents, label: str) -> set:
+    """Concept, its direct ontology parents, and 5-letter word stems: un-merged synonyms
+    ('sodium lactate' / 'lactate') still meet; embeddings and the top-K cap prune the rest."""
+    stems = {"stem:" + w[:5] for w in re.findall(r"[a-z0-9+]+", label.lower())
+             if len(w) >= 4 and w not in STEM_STOP}
+    return {concept, *parents} | stems
+
+
 def candidate_pairs(claims, embedder, threshold: float, k: int):
-    """Block on (subject concept, object concept or a shared ontology ancestor)."""
     blocks = defaultdict(set)
     for i, c in enumerate(claims):
-        for fam in [c.object_concept, *c.object_ancestors[:3]]:
-            blocks[(c.subject_concept, fam)].add(i)
+        for sk in _block_keys(c.subject_concept, c.subject_parents, c.subject_label):
+            for ok in _block_keys(c.object_concept, c.object_parents, c.object_label):
+                blocks[(sk, ok)].add(i)
     pairs = {tuple(sorted((i, j))) for idx in blocks.values() for i in idx for j in idx if i < j}
     if not pairs:
         return []

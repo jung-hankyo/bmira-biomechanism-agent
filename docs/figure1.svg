@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 836" width="960" height="836" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" role="img" aria-label="B-MiRA architecture: retrieve, build the evidence graph, weigh competing pathways, repeat until the stop rule fires, then write a verified report">
 <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#333333"/></marker></defs>
 <rect width="960" height="836" fill="#FFFFFF"/>
-<text x="24" y="24" font-size="15" font-weight="bold" fill="#111111" text-anchor="start">B-MiRA v2.0</text>
+<text x="24" y="24" font-size="15" font-weight="bold" fill="#111111" text-anchor="start">B-MiRA v2.1</text>
 <text x="118" y="24" font-size="12" font-weight="normal" fill="#555555" text-anchor="start">one investigation, repeated until the stop rule fires</text>
 <rect x="24" y="60" width="876" height="116" rx="8" fill="#FAFAFA" stroke="#BDBDBD" stroke-width="1"/>
 <text x="46" y="84" font-size="17" font-weight="bold" fill="#111111" text-anchor="start">a</text>
@@ -12,10 +12,11 @@
 <text x="150.0" y="140.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">exposure → outcome</text>
 <polygon points="288,100 428,100 442,128.0 428,156 288,156 274,128.0" fill="#E6EDF8" stroke="#2F4B7C" stroke-width="1.4"/>
 <text x="358.0" y="126.5" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Parse &amp; plan</text>
-<text x="358.0" y="140.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">PECO and search queries</text>
+<text x="358.0" y="140.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">PECO, readouts, queries</text>
 <rect x="482" y="100" width="168" height="56" rx="3" fill="#F1F1F1" stroke="#444444" stroke-width="1.2"/>
-<text x="566.0" y="126.5" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Search</text>
-<text x="566.0" y="140.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">PubMed · Europe PMC</text>
+<text x="566.0" y="119.8" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Search</text>
+<text x="566.0" y="133.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">PubMed · Europe PMC</text>
+<text x="566.0" y="147.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">+ synonym query per step</text>
 <polygon points="704,100 844,100 858,128.0 844,156 704,156 690,128.0" fill="#E6EDF8" stroke="#2F4B7C" stroke-width="1.4"/>
 <text x="774.0" y="126.5" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Screen papers</text>
 <text x="774.0" y="140.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">relevance, study type</text>
@@ -28,20 +29,21 @@
 <text x="884" y="219" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="end" font-style="italic">every round; claims are only added, never rewritten</text>
 <polygon points="720,238 828,238 842,274.0 828,310 720,310 706,274.0" fill="#E6EDF8" stroke="#2F4B7C" stroke-width="1.4"/>
 <text x="774.0" y="265.8" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Extract claims</text>
-<text x="774.0" y="279.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">quote-checked</text>
-<text x="774.0" y="293.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">against the source</text>
+<text x="774.0" y="279.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">quote, entities and</text>
+<text x="774.0" y="293.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">polarity checked</text>
 <rect x="542" y="238" width="136" height="72" rx="3" fill="#F1F1F1" stroke="#444444" stroke-width="1.2"/>
 <text x="610.0" y="265.8" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Normalize</text>
-<text x="610.0" y="279.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">ontology concepts,</text>
-<text x="610.0" y="293.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">relations, synonyms</text>
+<text x="610.0" y="279.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">entity + attribute,</text>
+<text x="610.0" y="293.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">ontology concepts</text>
 <rect x="378" y="238" width="136" height="72" rx="3" fill="#F1F1F1" stroke="#444444" stroke-width="1.2"/>
 <text x="446.0" y="265.8" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Grade claims</text>
-<text x="446.0" y="279.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">design, perturbation,</text>
-<text x="446.0" y="293.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">controls</text>
+<text x="446.0" y="279.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">per-claim system;</text>
+<text x="446.0" y="293.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">methods need text</text>
 <polygon points="228,238 336,238 350,274.0 336,310 228,310 214,274.0" fill="#E6EDF8" stroke="#2F4B7C" stroke-width="1.4"/>
-<text x="282.0" y="265.8" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Compare claims</text>
-<text x="282.0" y="279.8" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">same finding?</text>
-<text x="282.0" y="293.2" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">real conflict?</text>
+<text x="282.0" y="259.0" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Compare claims</text>
+<text x="282.0" y="273.0" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">same finding?</text>
+<text x="282.0" y="286.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">conflict checked</text>
+<text x="282.0" y="300.0" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">against context</text>
 <path d="M50,247 A68.0,9 0 0 1 186,247 V301 A68.0,9 0 0 1 50,301 Z" fill="#FFF2CC" stroke="#8A6D1D" stroke-width="1.4"/>
 <path d="M50,247 A68.0,9 0 0 0 186,247" fill="none" stroke="#8A6D1D" stroke-width="1.4"/>
 <text x="118.0" y="271.8" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Evidence graph</text>
@@ -86,7 +88,7 @@
 <text x="739.0" y="511.0" font-size="12.5" font-weight="bold" fill="#111111" text-anchor="middle">Allocate searches</text>
 <text x="739.0" y="525.0" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">exploit decisive steps,</text>
 <text x="739.0" y="538.5" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">explore rival pathways</text>
-<text x="739.0" y="552.0" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">3 targets per round</text>
+<text x="739.0" y="552.0" font-size="10.5" font-weight="normal" fill="#555555" text-anchor="middle">hits read for each step</text>
 <path d="M620,526 H654" fill="none" stroke="#333333" stroke-width="1.3" marker-end="url(#ah)"/>
 <polygon points="739.0,600 814,640.0 739.0,680 664,640.0" fill="#FFFFFF" stroke="#111111" stroke-width="1.6"/>
 <text x="739.0" y="645.5" font-size="13" font-weight="bold" fill="#111111" text-anchor="middle">Stop?</text>

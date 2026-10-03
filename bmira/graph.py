@@ -19,7 +19,9 @@ from bmira import portfolio as pf
 from bmira.config import Settings
 from bmira.evidence import grade_claim, prose_sentences, verify_text
 from bmira.llm import PROMPTS
-from bmira.normalize import EntityResolver, consolidate_aliases, lexical_relation, span_is_anchored
+from bmira.evidence import claim_study_type, verify_methods
+from bmira.normalize import (EntityResolver, check_claim, consolidate_aliases, lexical_relation,
+                             lookup_key, split_attribute)
 from bmira.schemas import (Claim, ClaimList, Conflict, EntailmentBatch, Hypothesis, LinkEvidence,
                            Paper, ParsedQuestion, PathwayProposal, QueryPlan,
                            RelationResolutionBatch, Screen, SearchQuery)
@@ -68,13 +70,14 @@ class State(TypedDict, total=False):
     parsed: ParsedQuestion
     exposure: str
     outcome: str
+    outcome_ids: list
     queries: list
     papers: Annotated[list, _merge(Paper, "pmid")]
     claims: Annotated[list, _merge(Claim, "id")]
     dropped_claims: Annotated[list, operator.add]
     extracted_pmids: Annotated[list, operator.add]
     search_status: str
-    target_yield: dict
+    target_searches: dict
     search_log: Annotated[list, operator.add]
     semantic_status: str
     semantic_edges: list
@@ -100,9 +103,11 @@ def parse(state, rt):
     p = rt.llm.structured("parse", ParsedQuestion, PROMPTS["parse"], state["question"],
                           ctx={"question": state["question"]})
     exp, out = rt.resolver.resolve(p.exposure), rt.resolver.resolve(p.outcome)
-    print(f"[parse] exposure={exp.label} ({exp.id}) outcome={out.label} ({out.id}) "
-          f"expected={p.expected_direction}")
-    return {"parsed": p, "exposure": exp.id, "outcome": out.id, "round_idx": 0, "targets": []}
+    readouts = [rt.resolver.resolve(split_attribute(x)[0]) for x in p.outcome_readouts]
+    print(f"[parse] exposure={exp.label} outcome={out.label} readouts={[r.label for r in readouts]} "
+          f"expected={p.expected_direction} population={p.target_system}")
+    return {"parsed": p, "exposure": exp.id, "outcome": out.id, "round_idx": 0, "targets": [],
+            "outcome_ids": [out.id] + [r.id for r in readouts]}
 
 
 def plan(state, rt):
@@ -124,39 +129,61 @@ def plan(state, rt):
     else:
         keys = {t.key for t in targets}
         queries = [q for q in out.queries if q.target in keys]
-        for t in targets:                       # never let a target go unsearched silently
-            if not any(q.target == t.key for q in queries):
-                queries.append(SearchQuery(query=f'"{t.subject_label}" AND "{t.object_label}"',
-                                           intent="gap_positive", target=t.key))
+        queries += [_synonym_query(t, rt) for t in targets]   # every step: one query built by code
     print(f"[plan] round {state.get('round_idx', 0) + 1}: {len(queries)} queries"
           + (f" for {len(targets)} target links" if targets else " (coverage round)"))
     return {"queries": queries}
 
 
+def _synonym_query(t, rt) -> SearchQuery:
+    """(names of the subject) AND (names of the object), from every surface form that
+    resolved to each concept. Exact quoted labels often match nothing and then looked like
+    an absence of evidence."""
+    def names(cid, label):
+        forms = {label} | {k for k, c in rt.resolver.cache.items() if rt.resolver.canonical(c).id == cid}
+        return "(" + " OR ".join(f"({n})" for n in sorted(forms, key=len)[:4]) + ")"
+    return SearchQuery(query=f"{names(t.subject, t.subject_label)} AND {names(t.object, t.object_label)}",
+                       intent="gap_alternative_terms", target=t.key)
+
+
 def search(state, rt):
-    known = {_as(Paper, p).pmid for p in state.get("papers", [])}
-    log, new_ids, per_target = [], [], {}
+    known = {p.pmid: p for p in (_as(Paper, x) for x in state.get("papers", []))}
+    log, new_ids, hits_for, stats = [], [], {}, {}
     for q in state["queries"]:
         q = _as(SearchQuery, q)
+        st = stats.setdefault(q.target, {"ok": 0, "clean": 0}) if q.target else {}
         try:
             res = rt.source.search(q.query, rt.settings.max_papers_per_query)
         except Exception as e:
             log.append({"query": q.query, "target": q.target, "ok": False, "error": type(e).__name__})
             continue
-        fresh = [i for i in res["pmids"] if i not in known]
-        new_ids += [i for i in fresh if i not in new_ids]
+        new_ids += [i for i in res["pmids"] if i not in known and i not in new_ids]
         if q.target:
-            per_target.setdefault(q.target, set()).update(fresh)
+            st["ok"] += 1
+            st["clean"] += not res.get("ignored_terms")
+            for pid in res["pmids"]:
+                hits_for.setdefault(pid, set()).add(q.target)
         log.append({"query": q.query, "target": q.target, "ok": True, "hits": len(res["pmids"]),
-                    "new": len(fresh), "translation": res.get("translation", ""),
-                    "ignored_terms": res.get("ignored_terms", [])})
-    executed = [x for x in log if x["ok"]]
-    papers = rt.source.fetch(new_ids) if new_ids else []
-    status = ("SEARCH_FAILED" if not executed else
-              "NEW_RESULTS" if papers else "ZERO_NEW_RESULTS")
-    print(f"[search] {status}: {len(executed)}/{len(log)} queries ran, {len(papers)} new papers")
-    return {"papers": papers, "search_status": status, "search_log": log,
-            "target_yield": {k: len(v) for k, v in per_target.items()}}
+                    "translation": res.get("translation", ""), "ignored_terms": res.get("ignored_terms", [])})
+    try:
+        papers = rt.source.fetch(new_ids) if new_ids else []
+        fetched = True
+    except Exception as e:
+        print(f"[search] fetch failed ({type(e).__name__}); this round does not count as a search")
+        papers, fetched = [], False
+    for p in papers:
+        p.retrieved_for = sorted(hits_for.get(p.pmid, ()))
+    updated = []                                  # known papers found again for a new step
+    for pid, steps in hits_for.items():
+        if pid in known and not steps <= set(known[pid].retrieved_for):
+            updated.append(known[pid].model_copy(update={
+                "retrieved_for": sorted(set(known[pid].retrieved_for) | steps)}))
+    ran = sum(x["ok"] for x in log)
+    status = "SEARCH_FAILED" if not ran or not fetched else "NEW_RESULTS" if papers else "ZERO_NEW_RESULTS"
+    print(f"[search] {status}: {ran}/{len(log)} queries ran, {len(papers)} new papers, "
+          f"{len(updated)} known papers matched new steps")
+    return {"papers": papers + updated, "search_status": status, "search_log": log,
+            "target_searches": stats}
 
 
 def screen(state, rt):
@@ -184,43 +211,79 @@ def screen(state, rt):
 
 
 def fan_out(state, rt):
+    """Papers retrieved for a step are read FOR that step first (even if read before);
+    then unread papers by relevance. Previously a targeted round could 'search' a step
+    without anyone reading the hits for it."""
     done = set(state.get("extracted_pmids", []))
-    pool = sorted((_as(Paper, p) for p in state["papers"]),
+    links = {k: _as(LinkEvidence, v) for k, v in state.get("links", {}).items()}
+    claims = [_as(Claim, c) for c in state.get("claims", [])] + \
+             [_as(Claim, c) for c in state.get("dropped_claims", [])]
+    pool = sorted((p for p in (_as(Paper, x) for x in state["papers"]) if p.screen_status == "included"),
                   key=lambda p: (-p.relevance_score, p.pmid))
-    todo = [p for p in pool if p.screen_status == "included" and p.pmid not in done]
-    todo = todo[:rt.settings.max_extract_per_round]   # the rest wait for the next round
-    return [Send("extract", {"paper": p, "question": state["question"]}) for p in todo] or ["normalize"]
+    pending = lambda p: [k for k in p.retrieved_for if k not in p.read_for]
+    todo = [p for p in pool if pending(p)] + [p for p in pool if p.pmid not in done and not pending(p)]
+    sends = []
+    for p in todo[:rt.settings.max_extract_per_round]:          # the rest wait, not dropped
+        mine = [c for c in claims if c.pmid == p.pmid]
+        sends.append(Send("extract", {
+            "paper": p, "question": state["question"], "round": state.get("round_idx", 0) + 1,
+            "focus": [links[k] for k in pending(p) if k in links], "focus_keys": pending(p),
+            "n_existing": len(mine),
+            "seen": {(lookup_key(c.span), lookup_key(c.subject), lookup_key(c.relation), lookup_key(c.object))
+                     for c in mine}}))
+    return sends or ["normalize"]
 
 
 def extract(payload, rt):
     paper = rt.source.fulltext(payload["paper"])
     s = rt.settings
+    focus = "".join(f"\n- {t.subject_label} --{t.relation}--> {t.object_label}" for t in payload["focus"])
     try:
         out = rt.llm.structured(
             "extract", ClaimList, PROMPTS["extract"].format(max_claims=s.max_claims_per_paper),
-            f"Question: {payload['question']}\n\nPaper (PMID {paper.pmid}, {paper.text_access}):\n"
-            f"{paper.source_text[:s.fulltext_char_limit]}", ctx={"paper": paper})
+            f"Question: {payload['question']}\n" + (f"Focus steps (report any finding on them, "
+                                                    f"including null or opposite):{focus}\n" if focus else "")
+            + f"\nPaper (PMID {paper.pmid}, {paper.text_access}):\n{paper.source_text[:s.fulltext_char_limit + 2000]}",
+            ctx={"paper": paper, "focus": payload["focus"]})
     except Exception as e:
         print(f"[extract] PMID {paper.pmid} failed ({type(e).__name__}); retried next round")
         return {}
-    claims = [Claim(**ec.model_dump(), id=f"C{paper.pmid}_{i}", pmid=paper.pmid,
-                    study_type=paper.study_type or "cell_line", text_access=paper.text_access,
-                    relation_raw=ec.relation)
-              for i, ec in enumerate(out.claims[:s.max_claims_per_paper])]
-    kept = [c for c in claims if span_is_anchored(c.span, paper.source_text)]
-    for c in kept:
-        c.anchored = True
-    dropped = [c for c in claims if not c.anchored]
-    print(f"[extract] {paper.pmid}: {len(kept)} anchored, {len(dropped)} dropped ({paper.text_access})")
+    kept, dropped, n = [], [], payload["n_existing"]
+    for ec in out.claims[:s.max_claims_per_paper]:
+        sig = (lookup_key(ec.span), lookup_key(ec.subject), lookup_key(ec.relation), lookup_key(ec.object))
+        if sig in payload["seen"]:                          # re-read for a step: no duplicates
+            continue
+        payload["seen"].add(sig)
+        c = Claim(**ec.model_dump(), id=f"C{paper.pmid}_{n}", pmid=paper.pmid, round=payload["round"],
+                  study_type=claim_study_type(paper.study_type, paper.pubtype_study_type, ec.system),
+                  text_access=paper.text_access, relation_raw=ec.relation)
+        n += 1
+        reason, warnings = check_claim(c, paper.source_text)
+        if reason:
+            c.drop_reason = reason
+            dropped.append(c)
+            continue
+        c.anchored, c.method_checks = True, warnings
+        kept.append(verify_methods(c, paper.source_text))
+    reads = sorted(set(paper.read_for) | set(payload["focus_keys"]))
+    print(f"[extract] {paper.pmid}: {len(kept)} kept, {len(dropped)} dropped"
+          + (f" ({', '.join(c.drop_reason for c in dropped)})" if dropped else "")
+          + (f"; read for {len(payload['focus_keys'])} step(s)" if payload["focus_keys"] else ""))
     return {"claims": kept, "dropped_claims": dropped, "extracted_pmids": [paper.pmid],
-            "papers": [paper]}
+            "papers": [paper.model_copy(update={"read_for": reads})]}
 
 
 def _set_concepts(c, rt):
-    s, o = rt.resolver.resolve(c.subject), rt.resolver.resolve(c.object)
+    (se, sa), (oe, oa) = split_attribute(c.subject), split_attribute(c.object)
+    if c.subject_attribute == "none":
+        c.subject_attribute = sa
+    if c.object_attribute == "none":
+        c.object_attribute = oa
+    s, o = rt.resolver.resolve(se), rt.resolver.resolve(oe)
     c.subject_concept, c.subject_label, c.subject_category = s.id, s.label, s.category
     c.object_concept, c.object_label, c.object_category = o.id, o.label, o.category
-    c.object_ancestors = list(o.ancestors)
+    c.subject_parents, c.object_parents = list(s.parents), list(o.parents)
+    c.context_concept = rt.resolver.resolve(c.context_cell_type).id if c.context_cell_type else ""
 
 
 def normalize(state, rt):
@@ -247,9 +310,10 @@ def normalize(state, rt):
     for c in claims:
         _set_concepts(c, rt)
     merged = consolidate_aliases(claims, rt.resolver, rt.llm, rt.alias_verdicts)
+    target = _as(ParsedQuestion, state["parsed"]).target_system
     for c in claims:
         _set_concepts(c, rt)                               # cheap: cached + alias registry
-        grade_claim(c)
+        grade_claim(c, target)
     print(f"[normalize] {len(claims)} claims, {len(pending)} relations sent to LLM, "
           f"{merged} alias merges")
     return {"claims": claims}
@@ -311,10 +375,24 @@ def portfolio(state, rt):
     for k, v in state.get("links", {}).items():          # re-key: alias merges may have happened
         v = _as(LinkEvidence, v)
         prior.setdefault(_canon_key(k, rt), v)
-    for k in state.get("targets", []):                    # zero-yield accounting for last round
+    # R7: a step's search counts toward "no study found" only if it ran cleanly (>= 2 queries,
+    # >= 1 with no terms ignored by PubMed), every hit was read FOR the step, and no new claim
+    # on the step's entity pair appeared. Otherwise the round simply does not count.
+    this_round = state.get("round_idx", 0) + 1
+    papers = [_as(Paper, x) for x in state.get("papers", [])]
+    for k in state.get("targets", []):
         ck = _canon_key(k, rt)
-        searched_ok = state.get("search_status") != "SEARCH_FAILED"
-        if ck in prior and searched_ok and state.get("target_yield", {}).get(k, 0) == 0:
+        if ck not in prior:
+            continue
+        st = state.get("target_searches", {}).get(k, {})
+        clean = (state.get("search_status") != "SEARCH_FAILED" and st.get("ok", 0) >= 2
+                 and st.get("clean", 0) >= 1)
+        unread = any(k in p.retrieved_for and k not in p.read_for and p.screen_status == "included"
+                     for p in papers)
+        s_id, _, o_id = pf.split_key(ck)
+        found = any(c.round == this_round and (c.subject_concept, c.object_concept) == (s_id, o_id)
+                    for c in claims)
+        if clean and not unread and not found:
             prior[ck].zero_yield_count += 1
             prior[ck].exhausted = prior[ck].zero_yield_count >= s.zero_yield_rounds_to_exhaust
     hyps = [_as(Hypothesis, h) for h in state.get("hypotheses", [])]
@@ -322,8 +400,9 @@ def portfolio(state, rt):
         h.links = [_canon_key(k, rt) for k in h.links]
     labels = {cid: c.label for cid, c in r.concepts.items()}
     p = _as(ParsedQuestion, state["parsed"])
-    exposure, outcome = _canon(state["exposure"], rt), _canon(state["outcome"], rt)
-    outcomes = {outcome} | {cid for cid, c in r.concepts.items() if outcome in c.ancestors}
+    exposure = _canon(state["exposure"], rt)
+    named = {_canon(i, rt) for i in state.get("outcome_ids", [state["outcome"]])}
+    outcomes = named | {cid for cid, c in r.concepts.items() if named & set(c.ancestors)}
     seed_status = state.get("seed_status", "")
 
     if not seed_status:                                   # seed exactly once, even if it fails
@@ -375,7 +454,7 @@ def portfolio(state, rt):
 
     cats = {cid: c.category for cid, c in r.concepts.items()}
     hyps = pf.evaluate(hyps, links, cats, p.expected_direction, s)
-    rnd = state.get("round_idx", 0) + 1
+    rnd = this_round
     targets = pf.allocate(hyps, links, s, rnd)
     decision, gate = pf.decide(hyps, targets, rnd, s)
     if decision == "done":
@@ -421,6 +500,17 @@ def run_warnings(state, rt) -> list[str]:
         w.append("Search stopped at the round limit while some pathways were still open.")
     if state.get("seed_status") == "FAILED":
         w.append("Pathway seeding failed; only ledger-derived pathways were considered.")
+    dropped = [_as(Claim, c) for c in state.get("dropped_claims", [])]
+    if dropped:
+        why = {}
+        for c in dropped:
+            why[c.drop_reason] = why.get(c.drop_reason, 0) + 1
+        w.append(f"{len(dropped)} extracted claims failed their quote checks and were dropped: "
+                 + ", ".join(f"{n} {r}" for r, n in sorted(why.items())) + ".")
+    reset = sum(bool(c.method_checks) for c in claims)
+    if reset:
+        w.append(f"{reset} claims had method details (perturbation, rescue, controls) without "
+                 "supporting text; those details were not credited.")
     pending = sum(1 for c in claims if not c.relation_norm)
     if pending:
         w.append(f"{pending} claim relations could not be resolved and were excluded from support.")
@@ -440,7 +530,7 @@ def synthesize(state, rt):
         for k in h.links:
             tags.setdefault(k, f"L{len(tags) + 1}")
     used = {i for k in tags for i in links[k].support_ids + links[k].corroborating_ids
-            + links[k].contradicting_ids + links[k].context_dependent_ids}
+            + links[k].contradicting_ids + list(links[k].uncounted)}
     claims = [c for c in (_as(Claim, x) for x in state["claims"]) if c.id in used]
     conflicts = [_as(Conflict, c) for c in state.get("conflicts", [])]
     warnings = run_warnings(state, rt)
@@ -452,7 +542,7 @@ def synthesize(state, rt):
                                 f"{links[k].object_label} | {pf.STATUS_LABEL[links[k].status]} "
                                 f"({links[k].reason}) | grade={links[k].grade} | support="
                                 f"{links[k].support_ids} contra={links[k].contradicting_ids} "
-                                f"context-dependent={links[k].context_dependent_ids}"
+                                f"not counted={links[k].uncounted}"
                                 for k in h.links) for h in hyps) +
             "\n\nConflicts:\n" + ("\n".join(f"- {c.verdict}: {c.explanation}" for c in conflicts) or "none") +
             "\n\nClaim ledger:\n" + "\n".join(
@@ -503,8 +593,10 @@ def verify(state, rt):
                      f"{pf.ORIGIN_LABEL[h.origin]} | {'; '.join(pf.FLAG_LABEL[f] for f in h.logic_flags) or '-'} | "
                      + "; ".join(f"{tags[k]} {links[k].subject_label}→{links[k].object_label} "
                                  f"({_step_label(links[k])})" for k in h.links) + " |")
+    p = _as(ParsedQuestion, state["parsed"])
     stop = (f"Search stopped after {state['round_idx']} rounds: {pf.STOP_LABEL[state['gate']]}. "
-            "Scores rank pathways; they are not probabilities.")
+            f"Outcome measured as: {', '.join([p.outcome] + p.outcome_readouts)}. "
+            f"Population: {p.target_system}. Scores rank pathways; they are not probabilities.")
     report = (state["synthesis"] + "\n\n---\n## Pathway portfolio (computed)\n" + stop + "\n\n"
               + "\n".join(table)
               + "\n\n## Run-quality warnings\n" + ("\n".join(f"- {x}" for x in state["warnings"]) or "- none")

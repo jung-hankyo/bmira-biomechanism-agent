@@ -12,8 +12,10 @@ PROMPTS = {
     "parse": (
         "You are a biomedical research methodologist. Decompose the question into P-E-C-O-M "
         "(population/model, exposure/perturbation, comparator, outcome, mechanism hypothesis). "
-        "Set expected_direction to the "
-        "direction the question asserts for exposure -> outcome (up, down, none, unknown)."),
+        "Set expected_direction to the direction the question asserts for exposure -> outcome "
+        "(up, down, none, unknown). List 2-5 outcome_readouts: measurable readouts of the "
+        "outcome as bare entity names (e.g. IFNG, granzyme B, cytotoxicity). Set target_system "
+        "to the population the question is about (human, animal, cell, any)."),
     "plan": (
         "Write PubMed queries with MeSH terms, gene symbols and synonyms in valid syntax.\n"
         "If NO targets are given, return exactly 4 queries, one per intent: broad, mechanism, "
@@ -30,13 +32,20 @@ PROMPTS = {
         "Extract structured claims relevant to the question.\n"
         "1. claim_type separates what was MEASURED (observation), what authors CONCLUDED from "
         "their data (author_interpretation), and what goes BEYOND it (mechanistic_speculation).\n"
-        "2. span is copied VERBATIM from one place in the text; stitched or paraphrased spans "
-        "are discarded automatically.\n"
-        "3. relation is the surface wording ('prevents', 'is required for'); do not normalize.\n"
-        "4. perturbation_class / rescue_arm / orthogonal_validation / comparator_present come "
-        "from what the METHODS did, not from the conclusions. They decide the grade.\n"
-        "5. readout_is_inferred = true for computationally inferred readouts.\n"
-        "6. At most {max_claims} claims, closest to the question first."),
+        "2. span is ONE sentence copied VERBATIM from the text, and it must name both entities "
+        "and state the relation. Claims whose quote does not are discarded automatically.\n"
+        "3. subject/object are bare entity names (gene, protein, metabolite, cell type, process, "
+        "phenotype); put measurement words in *_attribute (expression, amount, activity, "
+        "modification).\n"
+        "4. relation is the surface wording from the span ('prevents', 'did not change').\n"
+        "5. system is the experimental system of THIS claim (one paper can contain several).\n"
+        "6. perturbation_class / rescue_arm / orthogonal_validation / comparator_present come "
+        "from what the METHODS did. Copy the sentence that shows them into methods_span; fields "
+        "without textual support are not credited.\n"
+        "7. readout_is_inferred = true for computationally inferred readouts.\n"
+        "8. At most {max_claims} claims. Priority: findings on any focus steps; then null or "
+        "opposite findings (always include them when reported); then other findings on the "
+        "question."),
     "relation": (
         "Map each surface relation to exactly one canonical relation: increases, decreases, "
         "modulates, no_effect, required_for, sufficient_for, associated_with, not_associated, "

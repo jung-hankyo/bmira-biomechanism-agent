@@ -1,6 +1,6 @@
 # B-MiRA — Biomedical Mechanism Inference Research Agent
 
-**v2.0** · LangGraph · Python 3.10+
+**v2.1** · LangGraph · Python 3.10+
 
 Ask *"Does X affect Y, and through which mechanisms?"*. B-MiRA searches PubMed, extracts claims from papers, grades the evidence, and weighs **several candidate pathways against each other** before writing a report in which every sentence is tied to a cited claim.
 
@@ -14,16 +14,17 @@ Ask *"Does X affect Y, and through which mechanisms?"*. B-MiRA searches PubMed, 
 |---|---|
 | Commits to the first mechanism it imagines | Keeps a **portfolio** of competing pathways and spends search effort on the ones that could change the ranking |
 | Re-invents the hypothesis every round, so results drift | Each pathway step has a stable identity, so evidence **accumulates** across rounds |
-| Overstates weak evidence | Every claim is **graded**; report wording is **checked** against the grade of the claims it cites |
+| Overstates weak evidence | Every claim is **graded** on what its text actually shows; report wording is **checked** against the grade of the claims it cites |
+| Trusts the model's reading of a paper | Each claim's quote must exist in the paper, name both entities and match the claim's direction; method details count only if the text shows them |
 | Hides gaps and failures | Gaps, contradictions and degraded runs are **stated in the report** |
 
 ## How it works
 
 <p align="center"><img src="docs/figure1.svg" alt="B-MiRA architecture in three panels: a, retrieve papers; b, build the evidence graph; c, weigh competing pathways, with a loop back to targeted search until the stop rule fires" width="100%"></p>
 
-**Figure 1 | B-MiRA architecture.** **a**, A question is parsed into search queries; PubMed and Europe PMC are searched and papers are screened. **b**, Claims are extracted with quote checks, normalized to ontology concepts, graded, and compared into a shared evidence graph. **c**, Candidate pathways from three sources compete: each is scored by its weakest step and given a verdict, and the next searches go to the steps that would most change the ranking. The loop repeats until the stop rule fires; a report is then written and every sentence is verified. Hexagons are LLM calls, rectangles are deterministic code. A 2× PNG for slides and papers is in [`docs/figure1.png`](docs/figure1.png).
+**Figure 1 | B-MiRA architecture.** **a**, A question is parsed into search queries; PubMed and Europe PMC are searched and papers are screened. **b**, Claims are extracted and checked against their quotes, normalized to ontology concepts, graded per claim, and compared into a shared evidence graph. **c**, Candidate pathways from three sources compete: each is scored by its weakest step and given a verdict, and the next searches go to the steps that would most change the ranking. The loop repeats until the stop rule fires; a report is then written and every sentence is verified. Hexagons are LLM calls, rectangles are deterministic code. A 2× PNG for slides and papers is in [`docs/figure1.png`](docs/figure1.png).
 
-**The evidence graph.** Every claim like *"lactate lowers NAD⁺ in CD8 T cells"* becomes an edge between two concepts. Supporting, corroborating and opposing papers attach to the same edge, so a step's evidence is shared by every pathway that uses it.
+**The evidence graph.** Every claim like *"lactate lowers NAD⁺ levels in CD8 T cells"* becomes an edge between two entities (*lactate → NAD⁺*); how the entity was measured (*levels*, *expression*, *activity*) is kept as a qualifier on the claim, so "IFNG expression" and "IFN-γ" meet at one node. Supporting, corroborating and opposing papers attach to the same edge, so a step's evidence is shared by every pathway that uses it.
 
 **The pathway portfolio.** Candidate pathways come from three places:
 1. **LLM proposals**: once, after the first search round, the model proposes a few pathways that must differ in their intermediate steps.
@@ -38,11 +39,26 @@ Every step and every pathway gets one of three verdicts, each with a one-line re
 
 | Verdict | Meaning |
 |---|---|
-| **Supported** | Every step has ≥ 2 independent papers, and opposing papers are fewer than half |
-| **Contradicted** | Opposing papers from comparable systems make up at least half, at moderate grade or better |
-| **Insufficient evidence** | Anything else, e.g. *"1 of 2 required papers"* or *"no study found after repeated searches"* |
+| **Supported** | Every step has ≥ 2 independent primary papers, at least one of moderate grade or better, and opposing papers are fewer than half |
+| **Contradicted** | Counted opposing papers make up at least half, at moderate grade or better |
+| **Insufficient evidence** | Anything else, e.g. *"1 of 2 required papers"*, *"only weak evidence"* or *"no study found in 2 targeted searches"* |
 
-"No study found after repeated searches" is worth noticing: it often marks an untested hypothesis rather than a wrong one.
+"No study found in 2 targeted searches" is worth noticing: it often marks an untested hypothesis rather than a wrong one. It is only stated after two clean searches whose hits were all read for that step.
+
+### Evidence rules
+
+Fixed rules, applied by code rather than by the model, decide what counts:
+
+| Rule | What it prevents |
+|---|---|
+| A claim's quote must appear in the paper, name both entities, and agree with the claim's direction (a "no" or "did not" cannot be added or dropped) | Misread or invented findings |
+| Perturbation, rescue, validation and control details count only if the quote or a quoted methods sentence shows them | Inflated grades |
+| Each claim is graded by its own experimental system (one paper can hold mouse and human data) | Paper-level mislabelling |
+| Evidence from a system further from the question's population (e.g. mouse for a human question) is capped at moderate | Over-reliance on indirect models |
+| Reviews are shown but never count as independent papers | Double-counting the same finding |
+| A null result counts against a step only if it had a control and is at least as strong as the support | Underpowered nulls erasing real effects |
+| An opposing finding is set aside as "different context" only if the recorded contexts really differ and it does not come from a system closer to humans | Explaining away contradictions |
+| Papers found for a step are read for that step before it can be called unfound | False "no study found" |
 
 ## Quick start
 
@@ -55,7 +71,7 @@ pip install -r requirements.txt
 **1. Try it offline (no keys, no network).** A synthetic scenario and a scripted model exercise the whole pipeline:
 
 ```bash
-python -m pytest -q tests          # 14 tests
+python -m pytest -q tests          # 19 tests
 streamlit run app.py               # choose "Offline demo" in the sidebar
 ```
 
@@ -114,20 +130,24 @@ All in `bmira/config.py`; the app exposes the round limit.
 | `min_studies_per_link` | 2 | Independent papers needed for a step to be Supported |
 | `n_seed_hypotheses` / `max_hypotheses` | 4 / 6 | Pathways proposed at the start / kept at once |
 | `targets_per_round` / `exploration_slots` | 3 / 1 | Steps searched per round / slots reserved for non-leading pathways |
-| `max_extract_per_round` | 10 | Papers read per round (the rest wait, they are not dropped) |
+| `max_extract_per_round` | 10 | Papers read per round; papers found for a step are read first, the rest wait |
+| `max_claims_per_paper` | 8 | Claims taken from one paper (null and opposing findings are prioritized) |
 
 ## Limitations
 
 - **Live paths are not yet validated end to end.** The offline tests prove the pipeline's logic; they do not prove extraction accuracy on real papers. Validation against an expert-annotated gold set is the next milestone.
 - Grade weights and thresholds are reasoned defaults, not calibrated values.
 - The relation vocabulary (11 relations) cannot express dose, timing or compositional effects; those stay in the claim's context fields.
-- Only open-access full texts are read; everything else is abstract-only, which caps the evidence grade.
+- Only open-access full texts are read; everything else is abstract-only, which caps the evidence grade. Full texts are read section by section (Results, figure legends, Methods first).
+- Rules are checked offline with invented papers. Ontology routing (OLS) and the quote checks have not yet been measured on real papers, so expect some valid claims to be dropped as too strict.
 
 ## Versioning
 
 **v2.0.0** is the first public release. It consolidates the internal prototypes (single-notebook versions 5–12) into a tested package, replaces the single mechanism chain with the pathway portfolio, and adds the chat interface. It was published without a license file.
 
-**v2.0.1** adds the MIT license, citation metadata and the architecture figure. Use v2.0.1 or later.
+**v2.0.1** adds the MIT license, citation metadata and the architecture figure.
+
+**v2.1.0** hardens the evidence pipeline: claims are checked against their quotes, method details need textual support, grades are per claim with an indirectness cap, reviews no longer count as independent, null results and context arguments face explicit rules, targeted searches are read for their step, entities are separated from how they were measured, and retrieval retries and reads full texts by section. Expect fewer Supported and fewer "no study found" verdicts than v2.0; both are corrections.
 
 ## License
 

@@ -12,7 +12,7 @@ class Settings:
     # retrieval
     max_papers_per_query: int = 20
     max_extract_per_round: int = 10               # top-N by relevance; the rest wait, they are not dropped
-    max_claims_per_paper: int = 6
+    max_claims_per_paper: int = 8
     fulltext_char_limit: int = 60000
     # evidence
     min_studies_per_link: int = 2

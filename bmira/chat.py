@@ -19,7 +19,7 @@ def portfolio_rows(state) -> list[dict]:
 def run_context(state, max_claims=150) -> str:
     links, hyps = state["links"], state["hypotheses"]
     used = {i for h in hyps for k in h.links for i in links[k].support_ids
-            + links[k].contradicting_ids + links[k].context_dependent_ids}
+            + links[k].contradicting_ids + list(links[k].uncounted)}
     claims = [c for c in state["claims"] if c.id in used][:max_claims]
     lines = [f"Question: {state['question']}",
              f"Search stopped: {pf.STOP_LABEL[state['gate']]} after {state['round_idx']} rounds.",
@@ -30,7 +30,7 @@ def run_context(state, max_claims=150) -> str:
             ln = links[k]
             lines.append(f"  step {ln.subject_label} -{ln.relation}-> {ln.object_label}: "
                          f"{pf.STATUS_LABEL[ln.status]} ({ln.reason}); support {ln.support_ids}; "
-                         f"opposing {ln.contradicting_ids}; context-dependent {ln.context_dependent_ids}")
+                         f"opposing {ln.contradicting_ids}; not counted {ln.uncounted}")
     lines += ["", "Claims:"] + [
         f"[{c.id}] ({c.grade}) {c.subject_label} {c.relation_norm} {c.object_label} | "
         f"{c.study_type} | {c.context_cell_type} | PMID {c.pmid}" for c in claims]

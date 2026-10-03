@@ -9,11 +9,14 @@ from bmira.llm import PROMPTS
 from bmira.schemas import AliasBatch, EntityResolution, RELATION_SET
 
 OLS = "https://www.ebi.ac.uk/ols4/api"
+# Ontologies searched, best first. Unrestricted search returns exact matches from obscure
+# ontologies (e.g. an unmapped NCIT term) ahead of the right one.
+ONTOLOGIES = ["chebi", "pr", "go", "cl", "hp", "mp", "efo", "mondo", "uberon", "ncit"]
 PREFIX_CATEGORY = {
     "CL": "cell_type", "GO": "process", "CHEBI": "chemical", "HP": "phenotype",
     "MP": "phenotype", "MONDO": "disease", "DOID": "disease", "EFO": "phenotype",
     "PR": "gene_or_protein", "HGNC": "gene_or_protein", "NCBIGENE": "gene_or_protein",
-    "UBERON": "anatomy",
+    "UBERON": "anatomy", "NCIT": "other",
 }
 
 
@@ -32,7 +35,8 @@ class Concept:
     category: str = "unknown"
     source: str = "local"
     confidence: float = 0.0
-    ancestors: tuple = ()
+    ancestors: tuple = ()      # transitive; used to recognise outcome descendants
+    parents: tuple = ()        # direct; used to block claim comparisons
 
 
 def local_concept(label: str) -> Concept:
@@ -100,34 +104,42 @@ class EntityResolver:
         return local_concept(name)
 
     def _ols(self, name: str) -> Concept | None:
-        """Accept an OLS hit only on an exact label or synonym match; a search rank is not a fact."""
+        """Accept an OLS hit only on an exact label or synonym match; a search rank is not a fact.
+        Among exact matches, the preferred ontology wins."""
         t = self.settings.ontology_timeout_s
         try:
             docs = requests.get(f"{OLS}/search", timeout=t, params={
-                "q": name, "rows": 5, "fieldList": "obo_id,label,synonym,ontology_name,iri"
-            }).json().get("response", {}).get("docs", [])
+                "q": name, "rows": 20, "ontology": ",".join(ONTOLOGIES),
+                "fieldList": "obo_id,label,synonym,ontology_name,iri"}).json().get("response", {}).get("docs", [])
         except Exception:
             return None
         want = lookup_key(name)
-        for d in docs:
-            names = [d.get("label", "")] + list(d.get("synonym") or [])
-            if d.get("obo_id") and want in {lookup_key(n) for n in names}:
-                prefix = d["obo_id"].split(":")[0].upper()
-                return Concept(d["obo_id"], d.get("label", name),
-                               PREFIX_CATEGORY.get(prefix, "unknown"), "ols", 0.9,
-                               self._ancestors(d.get("ontology_name", ""), d.get("iri", "")))
-        return None
+        exact = [d for d in docs if d.get("obo_id") and want in
+                 {lookup_key(n) for n in [d.get("label", "")] + list(d.get("synonym") or [])}]
+        if not exact:
+            return None
+        rank = lambda d: ONTOLOGIES.index(d["ontology_name"]) if d.get("ontology_name") in ONTOLOGIES else 99
+        d = min(exact, key=rank)
+        parents, ancestors = self._hierarchy(d.get("ontology_name", ""), d.get("iri", ""))
+        return Concept(d["obo_id"], d.get("label", name),
+                       PREFIX_CATEGORY.get(d["obo_id"].split(":")[0].upper(), "unknown"), "ols", 0.9,
+                       ancestors, parents)
 
-    def _ancestors(self, onto: str, iri: str) -> tuple:
+    def _hierarchy(self, onto: str, iri: str) -> tuple[tuple, tuple]:
+        """(direct parents, all ancestors). OLS does not order ancestors by depth, so slicing
+        the ancestor list for 'nearest' families was arbitrary."""
         if not onto or not iri:
-            return ()
-        try:
-            url = f"{OLS}/ontologies/{onto}/terms/{quote(quote(iri, safe=''), safe='')}/hierarchicalAncestors"
-            terms = requests.get(url, timeout=self.settings.ontology_timeout_s,
-                                 params={"size": 20}).json().get("_embedded", {}).get("terms", [])
-            return tuple(t["obo_id"] for t in terms if t.get("obo_id"))
-        except Exception:
-            return ()
+            return (), ()
+        base = f"{OLS}/ontologies/{onto}/terms/{quote(quote(iri, safe=''), safe='')}"
+        out = []
+        for rel in ("parents", "hierarchicalAncestors"):
+            try:
+                terms = requests.get(f"{base}/{rel}", timeout=self.settings.ontology_timeout_s,
+                                     params={"size": 50}).json().get("_embedded", {}).get("terms", [])
+                out.append(tuple(t["obo_id"] for t in terms if t.get("obo_id")))
+            except Exception:
+                out.append(())
+        return out[0], out[1]
 
 
 # ── alias consolidation ─────────────────────────────────────────────────────
@@ -160,10 +172,11 @@ def complete_linkage(ids: list[str], ok: set[frozenset]) -> list[list[str]]:
 def consolidate_aliases(claims, resolver: EntityResolver, llm, verdicts: dict, batch=50, cap=200):
     """Ask the LLM only about new, lexically plausible pairs; merge with complete linkage."""
     concepts = {}
-    for c in claims:
-        for surface in (c.subject, c.object):
-            k = resolver.resolve(surface)
-            concepts[k.id] = k
+    for c in claims:                     # the claims' resolved entities, never raw surfaces
+        for cid in (c.subject_concept, c.object_concept):
+            if cid in resolver.concepts:
+                k = resolver.canonical(resolver.concepts[cid])
+                concepts[k.id] = k
     ids = sorted(concepts)
     todo = []
     for x in range(len(ids)):
@@ -238,12 +251,29 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _tokens(s: str) -> list[str]:
+    """Content tokens; short negations are kept so a fabricated 'no' cannot slip through."""
+    return [t for t in re.findall(r"[a-z0-9]+", s) if len(t) > 2 or t in {"no", "nor"}]
+
+
+NEGATION_TOKENS = {"no", "not", "never", "neither", "nor", "without", "unchanged", "unaffected"}
+
+
 def _ordered(span_toks, src_toks) -> float:
-    i = 0
-    for t in src_toks:
-        if i < len(span_toks) and t == span_toks[i]:
-            i += 1
-    return i / len(span_toks) if span_toks else 0.0
+    """Share of span tokens found in order (missing tokens are skipped, not fatal)."""
+    j = hit = 0
+    for t in span_toks:
+        try:
+            j = src_toks.index(t, j) + 1
+            hit += 1
+        except ValueError:
+            continue
+    return hit / len(span_toks) if span_toks else 0.0
+
+
+def _match(span_toks, cand_toks, min_overlap) -> bool:
+    negs = NEGATION_TOKENS & set(span_toks)          # a negation is never tolerated as noise
+    return negs <= set(cand_toks) and _ordered(span_toks, cand_toks) >= min_overlap
 
 
 def span_is_anchored(span: str, source: str, min_overlap: float = 0.85) -> bool:
@@ -255,14 +285,74 @@ def span_is_anchored(span: str, source: str, min_overlap: float = 0.85) -> bool:
         return False
     if s in src:
         return True
-    toks = [t for t in re.findall(r"[a-z0-9]+", s) if len(t) > 2]
+    toks = _tokens(s)
     if not toks:
         return False
     for sent in re.split(r"(?<=[.!?])\s+", src):
-        if _ordered(toks, [t for t in re.findall(r"[a-z0-9]+", sent) if len(t) > 2]) >= min_overlap:
+        if _match(toks, _tokens(sent), min_overlap):
             return True
-    src_toks = [t for t in re.findall(r"[a-z0-9]+", src) if len(t) > 2]
+    src_toks = _tokens(src)
     w = max(len(toks) * 2, len(toks) + 10)
     # ponytail: O(n*w) window scan; fine for one paper, index sentences if full texts get huge
-    return any(_ordered(toks, src_toks[i:i + w]) >= min_overlap
+    return any(_match(toks, src_toks[i:i + w], min_overlap)
                for i in range(0, max(1, len(src_toks) - w + 1)))
+
+
+# ── claim-span consistency ──────────────────────────────────────────────────
+ATTRIBUTE_PATTERNS = [
+    (r"\b(?:m?rna |gene |protein )?expression\b|\btranscription\b", "expression"),
+    (r"\b(?:levels?|concentrations?|abundance|amounts?|content|secretion|production|release)\b", "amount"),
+    (r"\bsignal+ing\b", "activity"),
+    (r"\bphosphorylation\b", "modification"),
+]
+
+
+def split_attribute(surface: str) -> tuple[str, str]:
+    """'IFNG expression' -> ('IFNG', 'expression'). A graph node is the entity; how it was
+    measured is a qualifier on the claim. Cell- and tissue-level phrases are left intact
+    ('T cell activation' is a phenotype, not an attribute of T cells)."""
+    for pat, attr in ATTRIBUTE_PATTERNS:
+        if re.search(pat, surface, flags=re.I):
+            rest = re.sub(pat, " ", surface, flags=re.I)
+            rest = clean(re.sub(r"^\s*of\s+|\s+of\s*$", " ", rest))
+            if len(rest) >= 2 and not re.search(r"\b(cells?|tissues?)\b", rest, flags=re.I):
+                return rest, attr
+    return clean(surface), "none"
+
+
+STOP = {"the", "and", "with", "cells", "cell", "human", "mouse", "mice", "levels", "level", "expression"}
+NULL_CUE = re.compile(r"\b(?:no|not|never|neither|nor|unchanged|unaffected|without|fail(?:ed|s)?|"
+                      r"similar|comparable|independent of)\b")
+NEGATORS = {"no", "not", "never", "neither", "nor", "without", "failed", "fail", "fails"}
+
+
+def _mentioned(surface: str, span: str) -> bool:
+    words = [w for w in re.findall(r"[a-z0-9+]+", surface.lower()) if w not in STOP]
+    span_words = re.findall(r"[a-z0-9+]+", span.lower())
+    long_ = [w for w in words if len(w) >= 3]
+    if not long_:                                    # 'pH', 'IL'
+        return any(w in span_words for w in words)
+    return any(any(sw.startswith(w[:4]) for sw in span_words) for w in long_)
+
+
+def check_claim(c, source: str) -> tuple[str, list[str]]:
+    """(drop reason or '', warnings). The quote must exist, name both entities, and agree
+    in polarity with the claimed relation; the structured claim was previously never checked
+    against its own quote."""
+    if not span_is_anchored(c.span, source):
+        return "quote not found in source", []
+    span = c.span.lower().replace("n't", " not")
+    for role, surface in (("subject", c.subject), ("object", c.object)):
+        if not _mentioned(surface, span):
+            return f"{role} not named in quote", []
+    rel = c.relation.lower().replace("n't", " not")
+    if NULL_CUE.search(rel):
+        return ("", []) if NULL_CUE.search(span) else ("null claim but the quote reports an effect", [])
+    words = re.findall(r"[a-z0-9]+", span)
+    verbs = [w for w in re.findall(r"[a-z]+", rel) if len(w) >= 4]
+    hits = [i for i, w in enumerate(words) if any(w.startswith(v[:4]) for v in verbs)]
+    if not hits:
+        return "", ["relation wording not in quote"]
+    if any(NEGATORS & set(words[max(0, i - 3):i]) for i in hits):
+        return "quote negates the claimed effect", []
+    return "", []

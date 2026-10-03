@@ -20,6 +20,11 @@ DIRECTION = {"increases": "up", "decreases": "down"}
 CLAIM_TYPES = Literal["observation", "author_interpretation", "mechanistic_speculation"]
 PERTURBATIONS = Literal["none", "genetic_association", "pharmacological", "environmental",
                         "knockdown", "knockout", "overexpression", "transfer"]
+SYSTEMS = Literal["human_in_vivo", "human_primary_cells", "animal_in_vivo", "animal_cells",
+                  "organoid", "cell_line", "in_silico", "unclear"]
+SYSTEM_GROUP = {"human_in_vivo": "human", "human_primary_cells": "human", "animal_in_vivo": "animal",
+                "animal_cells": "animal", "organoid": "cell", "cell_line": "cell", "in_silico": "in_silico"}
+ATTRIBUTES = Literal["none", "expression", "amount", "activity", "modification"]
 STUDY_TYPES = Literal["meta_analysis", "human_rct", "human_cohort", "human_crosssectional",
                       "human_primary", "organoid_ipsc", "animal", "cell_line",
                       "computational_cohort", "in_silico", "review"]
@@ -35,6 +40,10 @@ class ParsedQuestion(BaseModel):
     comparator: str
     outcome: str
     mechanism_hypothesis: str
+    outcome_readouts: list[str] = Field(default_factory=list, description=(
+        "2-5 measurable readouts of the outcome as bare entity names, e.g. IFNG, granzyme B"))
+    target_system: Literal["human", "animal", "cell", "any"] = Field(
+        "any", description="Population or system the question is about")
     expected_direction: Literal["up", "down", "none", "unknown"] = Field(
         "unknown", description="Direction the question asserts for exposure -> outcome")
 
@@ -43,7 +52,7 @@ class SearchQuery(BaseModel):
     query: str
     intent: Literal["broad", "mechanism", "contradiction", "negative_result",
                     "gap_positive", "gap_alternative_terms", "gap_null"]
-    target: str = Field("", description="Link id this query targets; empty in round 1")
+    target: str = Field("", description="Step id this query targets; empty in round 1")
 
 
 class QueryPlan(BaseModel):
@@ -65,6 +74,8 @@ class Paper(BaseModel):
     relevance_score: int = 0
     relevance_reason: str = ""
     study_type: Optional[STUDY_TYPES] = None
+    retrieved_for: list[str] = Field(default_factory=list)   # steps whose searches returned it
+    read_for: list[str] = Field(default_factory=list)        # steps it was extracted for
 
 
 class Screen(BaseModel):
@@ -77,9 +88,12 @@ class Screen(BaseModel):
 # ── claims ──────────────────────────────────────────────────────────────────
 class ExtractedClaim(BaseModel):
     claim_type: CLAIM_TYPES
-    subject: str
-    relation: str = Field(description="Surface relation, verbatim wording")
-    object: str
+    subject: str = Field(description="Bare entity name, without words like expression or levels")
+    subject_attribute: ATTRIBUTES = "none"
+    relation: str = Field(description="Surface relation, verbatim wording from the span")
+    object: str = Field(description="Bare entity name, without words like expression or levels")
+    object_attribute: ATTRIBUTES = "none"
+    system: SYSTEMS = Field("unclear", description="Experimental system of THIS claim")
     context_model: str = ""
     context_cell_type: str = ""
     context_dose: str = ""
@@ -90,6 +104,9 @@ class ExtractedClaim(BaseModel):
     comparator_present: bool = False
     readout_is_inferred: bool = False
     span: str = Field(description="Verbatim sentence from the text")
+    methods_span: str = Field("", description=(
+        "Verbatim sentence describing the perturbation, rescue, validation or comparator; "
+        "empty if the text does not describe them"))
 
 
 class ClaimList(BaseModel):
@@ -108,7 +125,12 @@ class Claim(ExtractedClaim):
     object_label: str = ""
     subject_category: str = "unknown"
     object_category: str = "unknown"
-    object_ancestors: list[str] = Field(default_factory=list)
+    subject_parents: list[str] = Field(default_factory=list)
+    object_parents: list[str] = Field(default_factory=list)
+    context_concept: str = ""
+    round: int = 0
+    method_checks: list[str] = Field(default_factory=list)   # method fields reset for lack of evidence
+    drop_reason: str = ""
     relation_raw: str = ""
     relation_norm: str = ""                        # "" = pending, never sent twice once set
     relation_source: str = ""
@@ -205,7 +227,7 @@ class LinkEvidence(BaseModel):
     support_ids: list[str] = Field(default_factory=list)
     corroborating_ids: list[str] = Field(default_factory=list)
     contradicting_ids: list[str] = Field(default_factory=list)
-    context_dependent_ids: list[str] = Field(default_factory=list)   # opposing, but not counted
+    uncounted: dict = Field(default_factory=dict)  # claim id -> why it does not count
     n_studies: int = 0                             # independent papers: support + corroboration
     n_contra_studies: int = 0
     grade: GRADES = "ungraded"                     # best supporting claim

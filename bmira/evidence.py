@@ -6,7 +6,8 @@ deferral left most claims ungraded in the synthesis ledger.)
 """
 import re
 
-from bmira.schemas import (ASSOCIATIVE_RELATIONS, CAUSAL_RELATIONS, DIRECTION, LABEL,
+from bmira.normalize import span_is_anchored
+from bmira.schemas import (ASSOCIATIVE_RELATIONS, CAUSAL_RELATIONS, DIRECTION, LABEL, SYSTEM_GROUP,
                            NULL_RELATIONS, PHYSICAL_RELATIONS)
 
 DIRECTNESS = {"observation": 3, "author_interpretation": 2, "mechanistic_speculation": 1}
@@ -15,6 +16,59 @@ CAUSAL_BASE = {"none": 0, "genetic_association": 1, "pharmacological": 2, "envir
 DESIGN = {"meta_analysis": 3, "human_rct": 3, "human_cohort": 3, "human_primary": 3,
           "human_crosssectional": 2, "organoid_ipsc": 2, "animal": 2, "computational_cohort": 2,
           "cell_line": 1, "in_silico": 1, "review": 1}
+
+
+SYSTEM_STUDY = {"human_primary_cells": "human_primary", "animal_in_vivo": "animal",
+                "animal_cells": "animal", "organoid": "organoid_ipsc", "cell_line": "cell_line",
+                "in_silico": "in_silico"}
+SYSTEM_RANK = {"human": 3, "animal": 2, "cell": 1, "in_silico": 1}
+TARGET_RANK = {"human": 3, "animal": 2, "cell": 1, "any": 0}
+
+
+def claim_study_type(paper_type, pubtype, system) -> str:
+    """Design of ONE claim. Mixed papers (mouse in vivo + human cells) were graded with a
+    single paper-level label. Pooled or secondary designs (meta-analysis, review) apply to
+    every claim; otherwise the claim's own system decides."""
+    if pubtype in {"meta_analysis", "review"}:
+        return pubtype
+    if system == "human_in_vivo":
+        if pubtype:
+            return pubtype
+        human = {"human_rct", "human_cohort", "human_crosssectional", "computational_cohort"}
+        return paper_type if paper_type in human else "human_crosssectional"
+    return SYSTEM_STUDY.get(system) or paper_type or "cell_line"
+
+
+METHOD_CUES = {
+    "knockout": r"knock-?out|delet|deficien|-/-|null mice|crispr|\bko\b",
+    "knockdown": r"knock-?down|sirna|shrna|silenc|antisense",
+    "overexpression": r"overexpress|transduc|transfect|forced expression",
+    "pharmacological": r"inhibit|agonist|antagonist|treat|block|drug|compound|supplement|precursor|\bdose",
+    "environmental": r"expos|treat|cultur|condition|supplement|medium|hypoxi|diet|acid",
+    "transfer": r"transfer|adoptive|transplant",
+    "genetic_association": r"variant|polymorphism|snp|allele|gwas|mendelian",
+}
+RESCUE_CUE = r"rescu|restor|re-?express|reconstitut|add-?back"
+ORTHOGONAL_CUE = r"independent|orthogonal|second|alternative|validat|confirm"
+COMPARATOR_CUE = r"compar|versus|\bvs\.?|relative to|than|control|wild-?type|\bwt\b|vehicle|untreated|baseline|scrambled"
+
+
+def verify_methods(c, source: str):
+    """Method fields drive the causal grade, so each needs textual evidence in the claim's
+    quote or an anchored methods sentence; unsupported fields are reset and recorded."""
+    text = c.span + (" " + c.methods_span if c.methods_span and span_is_anchored(c.methods_span, source) else "")
+    text = text.lower()
+    checks = []
+    if c.perturbation_class != "none" and not re.search(METHOD_CUES[c.perturbation_class], text):
+        checks.append(f"perturbation '{c.perturbation_class}' not evidenced")
+        c.perturbation_class = "none"
+    for field, cue in (("rescue_arm", RESCUE_CUE), ("orthogonal_validation", ORTHOGONAL_CUE),
+                       ("comparator_present", COMPARATOR_CUE)):
+        if getattr(c, field) and not re.search(cue, text):
+            checks.append(f"{field} not evidenced")
+            setattr(c, field, False)
+    c.method_checks += checks
+    return c
 
 
 def causal_support(c) -> int | None:
@@ -30,7 +84,7 @@ def causal_support(c) -> int | None:
     return s
 
 
-def grade_claim(c):
+def grade_claim(c, target_system: str = "any"):
     d = DIRECTNESS.get(c.claim_type, 1) - (1 if c.readout_is_inferred else 0)
     design = DESIGN.get(c.study_type, 1)
     causal = causal_support(c)
@@ -51,6 +105,11 @@ def grade_claim(c):
         tier, caps = 2, caps + ["abstract_only"]
     if c.relation_norm in {"unresolved", ""}:
         tier, caps = 1, caps + ["unresolved_relation"]
+    if "relation wording not in quote" in c.method_checks and tier > 1:
+        tier, caps = 1, caps + ["relation_unverified"]
+    rank = SYSTEM_RANK.get(SYSTEM_GROUP.get(c.system, ""), 0)
+    if rank and rank < TARGET_RANK.get(target_system, 0) and tier > 2:
+        tier, caps = 2, caps + ["indirect_system"]           # GRADE indirectness
     c.grade = LABEL[tier]
     c.grade_detail = {**axes, "causal_applicable": causal is not None, "uncapped_tier": uncapped,
                       "caps": caps, "limiting_axis": min(axes, key=axes.get)}
