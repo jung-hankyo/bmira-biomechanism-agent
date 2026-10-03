@@ -214,6 +214,11 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "ontology_share": _share(sum(c.source == "ols" for c in concepts), len(concepts)),
             "unresolved_samples": sorted(c.label for c in concepts if c.source == "local")[:20],
             "categories": _count(c.category for c in concepts), "alias_merges": len(res.alias),
+            # distinct entities / entity slots in kept claims: near 1.0 = every claim names
+            # new nodes (fragmented graph); lower = claims share nodes and can connect
+            "fragmentation": _share(len(concept_ids), 2 * len(claims)),
+            "entity_cache_reused": getattr(res, "disk_hits", 0),
+            "tissues": _count(t for c in claims for t in c.context_tissue.split(", ") if t),
             "distinct_contexts": len({c.context_concept for c in claims if c.context_concept})},
         "grading": {
             "grades": _count(c.grade for c in claims),
@@ -305,6 +310,9 @@ RULES = [
      "evidence.METHOD_CUES / COMPARATOR_CUE too narrow, or methods_span not being quoted"),
     ("unresolved concepts", lambda m: m["normalization"]["unresolved_local_share"],
      lambda v: v is not None and v > 0.50, "> 0.50", "normalize.EntityResolver._ols: ontology list, exact matching"),
+    ("fragmented graph", lambda m: (m["normalization"]["fragmentation"], m["extraction"]["claims_kept"]),
+     lambda v: v[0] is not None and v[0] > 0.7 and v[1] >= 20, "> 0.7 with >= 20 claims",
+     "normalize.entity_of (attribute, tissue, modifiers), alias merging, extract prompt rule 3"),
     ("no alias merges", lambda m: (m["normalization"]["alias_merges"], m["extraction"]["claims_kept"]),
      lambda v: v[0] == 0 and v[1] >= 30, "0 merges with >= 30 claims", "normalize._maybe_alias prefilter"),
     ("reading backlog", lambda m: _share(m["papers"]["included_never_extracted"], m["papers"]["included"]),

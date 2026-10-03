@@ -21,8 +21,8 @@ from bmira.config import Settings
 from bmira.evidence import grade_claim, prose_sentences, verify_text
 from bmira.llm import PROMPTS
 from bmira.evidence import claim_study_type, verify_methods
-from bmira.normalize import (EntityResolver, check_claim, consolidate_aliases, lexical_relation,
-                             lookup_key, split_attribute)
+from bmira.normalize import (EntityResolver, abbreviations, check_claim, consolidate_aliases,
+                             entity_of, entity_parts, lexical_relation, lookup_key)
 from bmira.schemas import (Claim, ClaimList, Conflict, EntailmentBatch, Hypothesis, LinkEvidence,
                            Paper, ParsedQuestion, PathwayProposal, QueryPlan,
                            RelationResolutionBatch, Screen, SearchQuery)
@@ -103,8 +103,8 @@ class State(TypedDict, total=False):
 def parse(state, rt):
     p = rt.llm.structured("parse", ParsedQuestion, PROMPTS["parse"], state["question"],
                           ctx={"question": state["question"]})
-    exp, out = rt.resolver.resolve(p.exposure), rt.resolver.resolve(p.outcome)
-    readouts = [rt.resolver.resolve(split_attribute(x)[0]) for x in p.outcome_readouts]
+    exp, out = rt.resolver.resolve(entity_of(p.exposure)[0]), rt.resolver.resolve(entity_of(p.outcome)[0])
+    readouts = [rt.resolver.resolve(entity_of(x)[0]) for x in p.outcome_readouts]
     print(f"[parse] exposure={exp.label} outcome={out.label} readouts={[r.label for r in readouts]} "
           f"expected={p.expected_direction} population={p.target_system}")
     return {"parsed": p, "exposure": exp.id, "outcome": out.id, "round_idx": 0, "targets": [],
@@ -154,7 +154,8 @@ def search(state, rt):
         q = _as(SearchQuery, q)
         st = stats.setdefault(q.target, {"ok": 0, "clean": 0}) if q.target else {}
         try:
-            res = rt.source.search(q.query, rt.settings.max_papers_per_query)
+            res = rt.source.search(q.query, rt.settings.max_papers_per_target_query if q.target
+                                   else rt.settings.max_papers_per_query)
         except Exception as e:
             log.append({"query": q.query, "target": q.target, "ok": False, "error": type(e).__name__})
             continue
@@ -193,8 +194,14 @@ def screen(state, rt):
         if p.retracted:
             p.screen_status, p.relevance_reason = "excluded", "retracted / expression of concern"
     live = [p for p in todo if not p.retracted]
+    links = {k: _as(LinkEvidence, v) for k, v in state.get("links", {}).items()}
+
+    def steps(p):                               # judge a targeted hit against its step, not only the question
+        named = [links[k] for k in p.retrieved_for if k in links]
+        return ("\nRetrieved for these mechanism steps:\n" + "\n".join(
+            f"- {t.subject_label} --{t.relation}--> {t.object_label}" for t in named)) if named else ""
     if live:
-        users = [f"Question: {state['question']}\n\nTitle: {p.title}\nAbstract: {p.abstract[:3000]}"
+        users = [f"Question: {state['question']}{steps(p)}\n\nTitle: {p.title}\nAbstract: {p.abstract[:3000]}"
                  for p in live]
         try:
             verdicts = rt.llm.structured_many("screen", Screen, PROMPTS["screen"], users, ctxs=live)
@@ -202,8 +209,10 @@ def screen(state, rt):
             print(f"[screen] batch failed ({type(e).__name__}); retrying next round")
             verdicts = []
         for p, r in zip(live, verdicts):
-            p.screen_status = "included" if r.relevant else "excluded"
-            p.relevance_score, p.relevance_reason = r.relevance_score, r.reason
+            keep = r.relevant and r.relevance_score >= rt.settings.min_relevance
+            p.screen_status = "included" if keep else "excluded"
+            p.relevance_score = r.relevance_score
+            p.relevance_reason = r.reason if keep or not r.relevant else f"below relevance cut-off: {r.reason}"
             p.study_type = p.pubtype_study_type or r.study_type   # metadata outranks the model
     todo = [p for p in todo if p.screen_status != "unscreened"]
     print(f"[screen] {len(todo)} screened, {sum(p.screen_status == 'included' for p in todo)} "
@@ -235,6 +244,16 @@ def fan_out(state, rt):
     return sends or ["normalize"]
 
 
+def _check(c, paper, abbrevs, kept, dropped):
+    reason, warnings = check_claim(c, paper.source_text, abbrevs)
+    if reason:
+        c.drop_reason = reason
+        dropped.append(c)
+        return
+    c.anchored, c.method_checks = True, warnings
+    kept.append(verify_methods(c, paper.source_text))
+
+
 def extract(payload, rt):
     paper = rt.source.fulltext(payload["paper"])
     s = rt.settings
@@ -250,22 +269,23 @@ def extract(payload, rt):
         print(f"[extract] PMID {paper.pmid} failed ({type(e).__name__}); retried next round")
         return {}
     kept, dropped, n = [], [], payload["n_existing"]
+    abbrevs = abbreviations(paper.source_text)
     for ec in out.claims[:s.max_claims_per_paper]:
-        sig = (lookup_key(ec.span), lookup_key(ec.subject), lookup_key(ec.relation), lookup_key(ec.object))
-        if sig in payload["seen"]:                          # re-read for a step: no duplicates
-            continue
-        payload["seen"].add(sig)
-        c = Claim(**ec.model_dump(), id=f"C{paper.pmid}_{n}", pmid=paper.pmid, round=payload["round"],
-                  study_type=claim_study_type(paper.study_type, paper.pubtype_study_type, ec.system),
-                  text_access=paper.text_access, relation_raw=ec.relation)
-        n += 1
-        reason, warnings = check_claim(c, paper.source_text)
-        if reason:
-            c.drop_reason = reason
-            dropped.append(c)
-            continue
-        c.anchored, c.method_checks = True, warnings
-        kept.append(verify_methods(c, paper.source_text))
+        subjects, s_tissue = entity_parts(ec.subject)        # 'NFAT1 and SMAD3' -> one claim each
+        objects, o_tissue = entity_parts(ec.object)
+        tissue = ", ".join(t for t in (ec.context_tissue, s_tissue, o_tissue) if t)
+        for subj in subjects:
+            for obj in objects:
+                sig = (lookup_key(ec.span), lookup_key(subj), lookup_key(ec.relation), lookup_key(obj))
+                if sig in payload["seen"]:                  # re-read for a step: no duplicates
+                    continue
+                payload["seen"].add(sig)
+                c = Claim(**{**ec.model_dump(), "subject": subj, "object": obj, "context_tissue": tissue},
+                          id=f"C{paper.pmid}_{n}", pmid=paper.pmid, round=payload["round"],
+                          study_type=claim_study_type(paper.study_type, paper.pubtype_study_type, ec.system),
+                          text_access=paper.text_access, relation_raw=ec.relation)
+                n += 1
+                _check(c, paper, abbrevs, kept, dropped)
     reads = sorted(set(paper.read_for) | set(payload["focus_keys"]))
     print(f"[extract] {paper.pmid}: {len(kept)} kept, {len(dropped)} dropped"
           + (f" ({', '.join(c.drop_reason for c in dropped)})" if dropped else "")
@@ -275,11 +295,13 @@ def extract(payload, rt):
 
 
 def _set_concepts(c, rt):
-    (se, sa), (oe, oa) = split_attribute(c.subject), split_attribute(c.object)
+    (se, sa, st), (oe, oa, ot) = entity_of(c.subject), entity_of(c.object)
     if c.subject_attribute == "none":
         c.subject_attribute = sa
     if c.object_attribute == "none":
         c.object_attribute = oa
+    tissues = [t for t in (c.context_tissue, st, ot) if t]
+    c.context_tissue = ", ".join(dict.fromkeys(", ".join(tissues).split(", "))) if tissues else ""
     s, o = rt.resolver.resolve(se), rt.resolver.resolve(oe)
     c.subject_concept, c.subject_label, c.subject_category = s.id, s.label, s.category
     c.object_concept, c.object_label, c.object_category = o.id, o.label, o.category
@@ -308,6 +330,8 @@ def normalize(state, rt):
                     c.relation_confidence = r.confidence
         except Exception as e:
             print(f"[relation] batch failed ({type(e).__name__}); claims stay pending for retry")
+    rt.resolver.resolve_many([e for c in claims for e in (entity_of(c.subject)[0], entity_of(c.object)[0])]
+                             + [c.context_cell_type for c in claims if c.context_cell_type])
     for c in claims:
         _set_concepts(c, rt)
     merged = consolidate_aliases(claims, rt.resolver, rt.llm, rt.alias_verdicts)
@@ -315,6 +339,7 @@ def normalize(state, rt):
     for c in claims:
         _set_concepts(c, rt)                               # cheap: cached + alias registry
         grade_claim(c, target)
+    rt.resolver.save()
     print(f"[normalize] {len(claims)} claims, {len(pending)} relations sent to LLM, "
           f"{merged} alias merges")
     return {"claims": claims}

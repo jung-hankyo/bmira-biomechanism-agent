@@ -8,7 +8,7 @@ import math
 from collections import defaultdict
 
 from bmira.evidence import SYSTEM_RANK, stance
-from bmira.normalize import split_attribute
+from bmira.normalize import entity_of
 from bmira.schemas import (ASSOCIATIVE_RELATIONS, DIRECTION, NULL_RELATIONS, RELATION_SET,
                            SYSTEM_GROUP, TIER, Hypothesis, LinkEvidence)
 
@@ -69,8 +69,8 @@ def _relevance(c) -> int:
 
 
 def context_of(c) -> tuple:
-    """Recorded context of a claim: (system group, normalized cell type)."""
-    return (SYSTEM_GROUP.get(c.system, "unclear"), c.context_concept or c.context)
+    """Recorded context of a claim: (system group, normalized cell type, tissue)."""
+    return (SYSTEM_GROUP.get(c.system, "unclear"), c.context_concept or c.context, c.context_tissue.lower())
 
 
 def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, extra=(),
@@ -177,7 +177,7 @@ def proposal_keys(pathway, resolver) -> tuple[list[str], dict]:
         if ln.relation not in RELATION_SET - {"unresolved"}:
             continue
         # same entity/attribute split as claims, or 'IFNG expression' would miss node 'IFNG'
-        s, o = resolver.resolve(split_attribute(ln.source)[0]), resolver.resolve(split_attribute(ln.target)[0])
+        s, o = resolver.resolve(entity_of(ln.source)[0]), resolver.resolve(entity_of(ln.target)[0])
         labels[s.id], labels[o.id] = s.label, o.label
         keys.append(link_key(s.id, ln.relation, o.id))
     return keys, labels

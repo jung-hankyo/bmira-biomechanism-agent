@@ -1,6 +1,6 @@
 # B-MiRA — Biomedical Mechanism Inference Research Agent
 
-**v2.3** · LangGraph · Python 3.10+
+**v2.4** · LangGraph · Python 3.10+
 
 Ask *"Does X affect Y, and through which mechanisms?"*. B-MiRA searches PubMed, extracts claims from papers, grades the evidence, and weighs **several candidate pathways against each other** before writing a report in which every sentence is tied to a cited claim.
 
@@ -24,7 +24,7 @@ Ask *"Does X affect Y, and through which mechanisms?"*. B-MiRA searches PubMed, 
 
 **Figure 1 | B-MiRA architecture.** **a**, A question is parsed into search queries; PubMed and Europe PMC are searched and papers are screened. **b**, Claims are extracted and checked against their quotes, normalized to ontology concepts, graded per claim, and compared into a shared evidence graph. **c**, Candidate pathways from three sources compete: each is scored by its weakest step and given a verdict, and the next searches go to the steps that would most change the ranking. The loop repeats until the stop rule fires; a report is then written and every sentence is verified. Hexagons are LLM calls, rectangles are deterministic code. A 2× PNG for slides and papers is in [`docs/figure1.png`](docs/figure1.png).
 
-**The evidence graph.** Every claim like *"lactate lowers NAD⁺ levels in CD8 T cells"* becomes an edge between two entities (*lactate → NAD⁺*); how the entity was measured (*levels*, *expression*, *activity*) is kept as a qualifier on the claim, so "IFNG expression" and "IFN-γ" meet at one node. Supporting, corroborating and opposing papers attach to the same edge, so a step's evidence is shared by every pathway that uses it.
+**The evidence graph.** Every claim like *"lactate lowers NAD⁺ levels in CD8 T cells"* becomes an edge between two entities (*lactate → NAD⁺*). How the entity was measured (*levels*, *expression*, *differentiation*) and where (*colon*, *bone marrow*) are qualifiers on the claim, not part of the node: "induction of colonic regulatory T cells", "Treg differentiation" and "bone marrow Treg cells" all meet at *regulatory T cell*. Lists such as "NFAT1 and SMAD3" become one claim per entity; ontology terms prefer species-agnostic entries, then human, mouse, rat. Supporting, corroborating and opposing papers attach to the same edge, so a step's evidence is shared by every pathway that uses it.
 
 **The pathway portfolio.** Candidate pathways come from three places:
 1. **LLM proposals**: once, after the first search round, the model proposes a few pathways that must differ in their intermediate steps.
@@ -71,7 +71,7 @@ pip install -r requirements.txt
 **1. Try it offline (no keys, no network).** A synthetic scenario and a scripted model exercise the whole pipeline:
 
 ```bash
-python -m pytest -q tests          # 28 tests
+python -m pytest -q tests          # 34 tests
 streamlit run app.py               # choose "Offline demo" in the sidebar
 ```
 
@@ -147,6 +147,10 @@ All in `bmira/config.py`; the app exposes the round limit.
 | `n_seed_hypotheses` / `max_hypotheses` | 4 / 6 | Pathways proposed at the start / kept at once |
 | `targets_per_round` / `exploration_slots` | 3 / 1 | Steps searched per round / slots reserved for non-leading pathways |
 | `max_extract_per_round` | 10 | Papers read per round; papers found for a step are read first, the rest wait |
+| `max_papers_per_target_query` | 5 | Hits per targeted query (the coverage round takes 20); reading capacity, not search, is the limit |
+| `min_relevance` | 50 | Screening score (0-100) a paper needs to be read; targeted hits are judged against their step |
+| `cheap_tasks` | 9 classification tasks | Tasks routed to the cheap model (screening, entities, relations, aliases, pairs, conflicts, entailment) |
+| `cache_dir` | `runs/cache` in live runs | Entity resolutions reused across runs |
 | `max_claims_per_paper` | 8 | Claims taken from one paper (null and opposing findings are prioritized) |
 | `temperature` | `None` | Sampling temperature; `None` uses each model's default (some reasoning models accept nothing else) |
 | `reasoning_effort` | low / medium per task | OpenAI reasoning effort: low for classification tasks, medium for reading papers, planning and the report |
@@ -174,6 +178,8 @@ All in `bmira/config.py`; the app exposes the round limit.
 **v2.2.0** adds run telemetry: token, latency and failure accounting per LLM task, a batch experiment runner that writes one session summary file, revision signals, and eight experiment questions.
 
 **v2.2.1** registers B-MiRA's data types with LangGraph's checkpoint serializer, so runs keep working when newer LangGraph releases block unregistered types. Use v2.2.1 or later for live experiments.
+
+**v2.4.0** fixes problems seen in the first live run. Graph nodes are entities, with measurement, process and tissue words kept as qualifiers. Lists are split into one claim per entity, and placeholders are rejected. Ontology choice is species-aware. The mention check accepts abbreviations the paper defines and the previous sentence. Targeted searches return fewer hits, judged against their step, with a relevance cut-off. Entity resolution is batched, parallel and cached across runs, and classification tasks run on the cheap model.
 
 **v2.3.0** makes live runs safe to pay for: preflight checks, fatal-error abort, partial summaries for runs that stop early, per-task reasoning effort, a soft token budget, cost estimates, reasoning-token counts, and provenance of uncommitted edits. Log lines from parallel steps no longer merge.
 

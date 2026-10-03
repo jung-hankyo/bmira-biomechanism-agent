@@ -390,3 +390,93 @@ def test_effort_retries_and_cost():
         del sys.modules["langchain_openai"]
     assert estimate_cost("gpt-6-sol", 1_000_000, 100_000, Settings().prices) == 3.0
     assert estimate_cost("unknown-model", 10, 10, Settings().prices) is None
+
+
+# J1-J5: entity granularity, species-aware ontology, mention check, retrieval balance, throughput.
+def test_entity_variants_collapse_to_one_node():
+    from bmira.normalize import entity_of, entity_parts, lookup_key, singular
+    variants = ["Induction of colonic regulatory T cells", "regulatory T-cell frequency",
+                "Bone marrow, splenic and Peyer’s patch regulatory T cells",
+                "Regulatory T cells in pancreatic lymph nodes", "butyrate-induced regulatory T cells"]
+    assert {lookup_key(singular(entity_of(v)[0])) for v in variants} == {"regulatory t cell"}
+    assert entity_of("Induction of colonic regulatory T cells")[1:] == ("differentiation", "colon")
+    assert entity_of("T cell activation") == ("T cell activation", "none", "")      # phenotype kept
+    assert entity_parts("NFAT1 and SMAD3") == (["NFAT1", "SMAD3"], "")
+    assert entity_parts("signal transducer and activator of transcription 3")[0] == [
+        "signal transducer and activator of transcription 3"]
+
+
+def test_mention_check_accepts_abbreviations_and_previous_sentence():
+    from bmira.normalize import abbreviations, check_claim
+    src = ("Mice received sodium butyrate (NaB) in drinking water. NaB increased Foxp3 expression in "
+           "colonic T cells compared with controls. This metabolite also increased IL-10 in the same cells.")
+    c = _claim("c", "p", "increases")
+    c.subject, c.object, c.relation = "sodium butyrate", "Foxp3", "increased"
+    c.span = "NaB increased Foxp3 expression in colonic T cells compared with controls."
+    assert check_claim(c, src, abbreviations(src)) == ("", [])
+    c.object, c.span = "IL-10", "This metabolite also increased IL-10 in the same cells."
+    assert check_claim(c, src, abbreviations(src))[0] == ""             # named one sentence earlier
+    c.subject = "not specified"
+    assert check_claim(c, src)[0] == "subject not specified"
+
+
+def test_ontology_prefers_species_agnostic_and_rejects_other_species(monkeypatch):
+    import bmira.normalize as nz
+
+    def docs(*items):
+        class R:
+            def json(self):
+                return {"response": {"docs": [{"obo_id": i, "label": lab, "synonym": ["IL-10"],
+                                               "ontology_name": "pr", "iri": ""} for i, lab in items]}}
+        return lambda *a, **k: R()
+    r = nz.EntityResolver(Settings(ontology_provider="ols"))
+    monkeypatch.setattr(nz.requests, "get", docs(("PR:1", "interleukin-10 (chicken)")))
+    assert r._ols("IL-10") is None
+    monkeypatch.setattr(nz.requests, "get", docs(("PR:1", "interleukin-10 (chicken)"),
+                                                 ("PR:2", "interleukin-10 (mouse)"), ("PR:3", "interleukin-10")))
+    assert r._ols("IL-10").id == "PR:3"
+    monkeypatch.setattr(nz.requests, "get", docs(("PR:2", "interleukin-10 (mouse)"), ("PR:4", "interleukin-10 (human)")))
+    assert r._ols("IL-10").id == "PR:4"
+
+
+def test_batched_resolution_and_disk_cache(tmp_path):
+    from bmira.normalize import EntityResolver
+    from bmira.offline import SurrogateLLM, load_scenario
+    s = Settings(ontology_provider="llm", cache_dir=str(tmp_path))
+    llm = SurrogateLLM(load_scenario())
+    r = EntityResolver(s, llm)
+    r.resolve_many(["lactate", "NAD+", "glycolytic flux", "lactate"])
+    assert llm.calls["entities"] == 1 and llm.items["entities"] == 3     # one call for three names
+    r.save()
+    llm2 = SurrogateLLM(load_scenario())
+    r2 = EntityResolver(s, llm2)
+    r2.resolve_many(["lactate", "NAD+"])
+    assert llm2.calls["entities"] == 0 and r2.disk_hits == 2              # reused across runs
+
+
+def test_screening_cutoff_and_targeted_retmax():
+    from bmira.telemetry import execute
+    rt, sc = offline_runtime()
+    next(p for p in rt.llm.s["papers"] if p["pmid"] == "S007")["relevance"] = 30
+    asked = []
+    real = rt.source.search
+    rt.source.search = lambda q, n: asked.append(n) or real(q, n)
+    final, _ = execute(sc["question"], rt, echo=False)
+    s007 = next(p for p in final["papers"] if p.pmid == "S007")
+    assert s007.screen_status == "excluded" and "cut-off" in s007.relevance_reason
+    assert asked[:4] == [20] * 4 and set(asked[4:]) == {5}                # coverage 20, targeted 5
+
+
+def test_classification_tasks_use_cheap_model():
+    import sys
+    import types
+    from bmira.llm import LangChainLLM
+    fake = types.ModuleType("langchain_openai")
+    fake.ChatOpenAI = lambda **kw: kw
+    sys.modules["langchain_openai"] = fake
+    try:
+        llm, m = LangChainLLM(Settings(), api_key="k"), Settings().models["openai"]
+        assert llm._for("pair", "reasoning")["model"] == m["cheap"]
+        assert llm._for("extract", "reasoning")["model"] == m["reasoning"]
+    finally:
+        del sys.modules["langchain_openai"]

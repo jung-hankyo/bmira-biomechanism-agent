@@ -24,7 +24,7 @@ SYSTEMS = Literal["human_in_vivo", "human_primary_cells", "animal_in_vivo", "ani
                   "organoid", "cell_line", "in_silico", "unclear"]
 SYSTEM_GROUP = {"human_in_vivo": "human", "human_primary_cells": "human", "animal_in_vivo": "animal",
                 "animal_cells": "animal", "organoid": "cell", "cell_line": "cell", "in_silico": "in_silico"}
-ATTRIBUTES = Literal["none", "expression", "amount", "activity", "modification"]
+ATTRIBUTES = Literal["none", "expression", "amount", "activity", "modification", "differentiation"]
 STUDY_TYPES = Literal["meta_analysis", "human_rct", "human_cohort", "human_crosssectional",
                       "human_primary", "organoid_ipsc", "animal", "cell_line",
                       "computational_cohort", "in_silico", "review"]
@@ -94,6 +94,7 @@ class ExtractedClaim(BaseModel):
     object: str = Field(description="Bare entity name, without words like expression or levels")
     object_attribute: ATTRIBUTES = "none"
     system: SYSTEMS = Field("unclear", description="Experimental system of THIS claim")
+    context_tissue: str = Field("", description="Tissue or site, e.g. colon, spleen, bone marrow")
     context_model: str = ""
     context_cell_type: str = ""
     context_dose: str = ""
@@ -157,6 +158,17 @@ class EntityResolution(BaseModel):
     normalized_label: str
     category: str
     confidence: float = Field(ge=0.0, le=1.0)
+
+
+class EntityItem(BaseModel):
+    surface: str = Field(description="The surface form exactly as given")
+    normalized_label: str
+    category: str
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class EntityBatch(BaseModel):
+    items: list[EntityItem]
 
 
 class AliasVerdict(BaseModel):

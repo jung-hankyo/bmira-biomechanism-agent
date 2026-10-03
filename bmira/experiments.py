@@ -39,7 +39,8 @@ def _runtime(a, overrides):
         from bmira.offline import offline_runtime
         return offline_runtime(**overrides)
     rt = Runtime.live(Settings(provider=a.provider, ncbi_email=os.environ.get("NCBI_EMAIL", ""),
-                               ncbi_api_key=os.environ.get("NCBI_API_KEY", ""), **overrides))
+                               ncbi_api_key=os.environ.get("NCBI_API_KEY", ""),
+                               cache_dir=str(ROOT / "runs" / "cache"), **overrides))
     return rt, None
 
 

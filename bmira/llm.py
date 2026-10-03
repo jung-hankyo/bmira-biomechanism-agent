@@ -14,9 +14,11 @@ PROMPTS = {
     "parse": (
         "You are a biomedical research methodologist. Decompose the question into P-E-C-O-M "
         "(population/model, exposure/perturbation, comparator, outcome, mechanism hypothesis). "
-        "Set expected_direction to the direction the question asserts for exposure -> outcome "
+        "Give exposure and outcome as bare entity or phenotype names, without verbs such as "
+        "induction or suppression and without tissue words (e.g. 'regulatory T cell', not "
+        "'induction of colonic regulatory T cells'). Set expected_direction to the direction the question asserts for exposure -> outcome "
         "(up, down, none, unknown). List 2-5 outcome_readouts: measurable readouts of the "
-        "outcome as bare entity names (e.g. IFNG, granzyme B, cytotoxicity). Set target_system "
+        "outcome as bare entity names (e.g. FOXP3, IL-10, granzyme B). Set target_system "
         "to the population the question is about (human, animal, cell, any)."),
     "plan": (
         "Write PubMed queries with MeSH terms, gene symbols and synonyms in valid syntax.\n"
@@ -26,19 +28,24 @@ PROMPTS = {
         "gap_alternative_terms, gap_null, and copy the target id into `target`. Do not re-run "
         "general coverage in targeted rounds."),
     "screen": (
-        "Decide whether this paper can contribute evidence to the question and classify its "
-        "study type from the abstract. Be inclusive of mechanism, negative and contradictory "
-        "findings. relevance_score 0-100: highest for papers testing a mechanism step or the "
-        "endpoint directly, low for background."),
+        "Decide whether this paper can contribute evidence to the question (or to the listed "
+        "mechanism steps, if any) and classify its study type from the abstract. Include "
+        "mechanism, negative and contradictory findings. relevance_score 0-100: 70+ only for "
+        "papers that report an experiment or analysis on the question or a listed step; 40-69 "
+        "for indirect evidence; below 40 for background, reviews of unrelated topics, or other "
+        "systems. Papers below 50 are not read."),
     "extract": (
         "Extract structured claims relevant to the question.\n"
         "1. claim_type separates what was MEASURED (observation), what authors CONCLUDED from "
         "their data (author_interpretation), and what goes BEYOND it (mechanistic_speculation).\n"
         "2. span is ONE sentence copied VERBATIM from the text, and it must name both entities "
         "and state the relation. Claims whose quote does not are discarded automatically.\n"
-        "3. subject/object are bare entity names (gene, protein, metabolite, cell type, process, "
-        "phenotype); put measurement words in *_attribute (expression, amount, activity, "
-        "modification).\n"
+        "3. subject and object are ONE entity each (gene, protein, metabolite, cell type, process, "
+        "phenotype), written with the span's own wording. Measurement or process words go in "
+        "*_attribute (expression, amount, activity, modification, differentiation); tissue or "
+        "site words (colonic, splenic, bone marrow) go in context_tissue. For 'A and B' write one "
+        "claim per entity. Reagents (antibodies, inhibitors, siRNA) are perturbations: name the "
+        "entity they target. Never write 'not specified'; skip the claim instead.\n"
         "4. relation is the surface wording from the span ('prevents', 'did not change').\n"
         "5. system is the experimental system of THIS claim (one paper can contain several).\n"
         "6. perturbation_class / rescue_arm / orthogonal_validation / comparator_present come "
@@ -57,6 +64,11 @@ PROMPTS = {
         "Normalize a biomedical entity. Do not invent database identifiers. Return a concise "
         "standard label and a broad category (gene_or_protein, chemical, cell_type, process, "
         "phenotype, disease, anatomy, other)."),
+    "entities": (
+        "Normalize each biomedical entity. Return the surface exactly as given, a concise "
+        "standard singular label without tissue or measurement words, and a broad category "
+        "(gene_or_protein, chemical, cell_type, process, phenotype, disease, anatomy, other). "
+        "Do not invent database identifiers."),
     "alias": (
         "Decide whether two surface forms denote the SAME entity: abbreviations, spelling "
         "variants, generic/trade names, and measurement synonyms of one quantity are the same. "
@@ -159,6 +171,7 @@ class LangChainLLM:
         return ChatAnthropic(**kw)
 
     def _for(self, task, role):
+        role = "cheap" if task in self.settings.cheap_tasks else role
         self.model_of[task] = self.settings.models[self.settings.provider][role]
         return self._model(role, self.settings.reasoning_effort.get(task))
 

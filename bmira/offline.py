@@ -127,6 +127,15 @@ class SurrogateLLM:
             RelationResolution(claim_id=c.id, canonical_relation=m.get(c.relation_raw.lower(), "unresolved"),
                                confidence=0.9) for c in ctx["claims"]])
 
+    def _entities(self, ctx):
+        from bmira.schemas import EntityBatch, EntityItem
+        items = []
+        for s in ctx["surfaces"]:
+            r = self._entity({"surface": s})
+            items.append(EntityItem(surface=s, normalized_label=r.normalized_label, category=r.category,
+                                    confidence=r.confidence))
+        return EntityBatch(items=items)
+
     def _entity(self, ctx):
         e = self.s["entities"].get(lookup_key(ctx["surface"]))
         if not e:

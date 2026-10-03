@@ -1,12 +1,15 @@
 """Entity resolution, alias registry, lexical relation typing and span anchoring."""
+import json
 import re
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from urllib.parse import quote
 
 import requests
 
 from bmira.llm import PROMPTS
-from bmira.schemas import AliasBatch, EntityResolution, RELATION_SET
+from bmira.schemas import AliasBatch, EntityBatch, EntityResolution, RELATION_SET
 
 OLS = "https://www.ebi.ac.uk/ols4/api"
 # Ontologies searched, best first. Unrestricted search returns exact matches from obscure
@@ -57,14 +60,92 @@ class EntityResolver:
         self.cache: dict[str, Concept] = {}
         self.concepts: dict[str, Concept] = {}
         self.alias: dict[str, str] = {}
+        self.disk_hits = 0
+        self._disk = self._load()
+
+    # ── disk cache: ontology and LLM resolutions are reused across runs ──
+    def _path(self):
+        d = self.settings.cache_dir
+        return Path(d) / f"entities_{self.settings.ontology_provider}.json" if d else None
+
+    def _load(self) -> dict:
+        p = self._path()
+        if p and p.exists():
+            try:
+                return {k: Concept(**{**v, "ancestors": tuple(v["ancestors"]), "parents": tuple(v["parents"])})
+                        for k, v in json.loads(p.read_text(encoding="utf-8")).items()}
+            except Exception:
+                return {}
+        return {}
+
+    def save(self):
+        p = self._path()
+        if p:
+            keep = {k: asdict(c) for k, c in self.cache.items() if c.source in {"ols", "llm", "identifier"}}
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps({**{k: asdict(c) for k, c in self._disk.items()}, **keep}),
+                         encoding="utf-8")
+
+    def _remember(self, key, c: Concept):
+        self.cache[key] = c
+        self.concepts.setdefault(c.id, c)
 
     def resolve(self, surface: str) -> Concept:
-        key = lookup_key(surface)
+        name = singular(surface)
+        key = lookup_key(name)
         if key not in self.cache:
-            c = self._resolve(clean(surface))
-            self.cache[key] = c
-            self.concepts.setdefault(c.id, c)
+            if key in self._disk:
+                self.disk_hits += 1
+                self._remember(key, self._disk[key])
+            else:
+                self._remember(key, self._resolve(name))
         return self.canonical(self.cache[key])
+
+    def resolve_many(self, surfaces):
+        """Resolve all new surfaces at once: identifiers and ontology lookups in parallel,
+        then ONE batched LLM call per 30 leftovers instead of one call each."""
+        todo = {}
+        for surface in surfaces:
+            name = singular(surface)
+            key = lookup_key(name)
+            if not key or key in self.cache or key in todo:
+                continue
+            if key in self._disk:
+                self.disk_hits += 1
+                self._remember(key, self._disk[key])
+            else:
+                todo[key] = name
+        if not todo:
+            return
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            found = dict(zip(todo, ex.map(self._known, todo.values())))
+        left = [k for k, c in found.items() if c is None]
+        if left and self.settings.ontology_provider in {"llm", "hybrid"} and self.llm is not None:
+            for i in range(0, len(left), 30):
+                chunk = [todo[k] for k in left[i:i + 30]]
+                try:
+                    out = self.llm.structured("entities", EntityBatch, PROMPTS["entities"],
+                                              "\n".join(f"- {n}" for n in chunk), role="cheap",
+                                              ctx={"surfaces": chunk}, n_items=len(chunk))
+                except Exception as e:
+                    print(f"[entity] batch failed ({type(e).__name__}); {len(chunk)} kept unresolved")
+                    continue
+                by_key = {lookup_key(singular(r.surface)): r for r in out.items}
+                for n in chunk:
+                    r = by_key.get(lookup_key(n))
+                    if r:
+                        base = local_concept(singular(r.normalized_label))
+                        found[lookup_key(n)] = Concept(base.id, base.label, r.category or "unknown",
+                                                       "llm", float(r.confidence))
+        for key, name in todo.items():
+            self._remember(key, found.get(key) or local_concept(name))
+
+    def _known(self, name: str) -> Concept | None:
+        if re.match(r"^[A-Za-z][A-Za-z0-9_.-]*:\S+$", name):
+            return Concept(name, name, "identifier", "identifier", 1.0)
+        if self.settings.ontology_provider in {"ols", "hybrid"}:
+            return self._ols(name)
+        return None
 
     def canonical(self, c: Concept) -> Concept:
         cid = c.id
@@ -85,20 +166,15 @@ class EntityResolver:
     def _resolve(self, name: str) -> Concept:
         if not name:
             return local_concept("unknown")
-        if re.match(r"^[A-Za-z][A-Za-z0-9_.-]*:\S+$", name):
-            return Concept(name, name, "identifier", "identifier", 1.0)
-        provider = self.settings.ontology_provider
-        if provider in {"ols", "hybrid"}:
-            c = self._ols(name)
-            if c:
-                return c
-        if provider in {"llm", "hybrid"} and self.llm is not None:
+        c = self._known(name)
+        if c:
+            return c
+        if self.settings.ontology_provider in {"llm", "hybrid"} and self.llm is not None:
             try:
                 r = self.llm.structured("entity", EntityResolution, PROMPTS["entity"],
                                         f"Entity: {name}", role="cheap", ctx={"surface": name})
-                base = local_concept(r.normalized_label)
-                return Concept(base.id, r.normalized_label, r.category or "unknown", "llm",
-                               float(r.confidence))
+                base = local_concept(singular(r.normalized_label))
+                return Concept(base.id, base.label, r.category or "unknown", "llm", float(r.confidence))
             except Exception as e:
                 print(f"[entity] LLM resolution failed for {name!r}: {type(e).__name__}")
         return local_concept(name)
@@ -118,8 +194,11 @@ class EntityResolver:
                  {lookup_key(n) for n in [d.get("label", "")] + list(d.get("synonym") or [])}]
         if not exact:
             return None
-        rank = lambda d: ONTOLOGIES.index(d["ontology_name"]) if d.get("ontology_name") in ONTOLOGIES else 99
-        d = min(exact, key=rank)
+        exact = [d for d in exact if _species(d.get("label", "")) != "other"]
+        if not exact:                                  # e.g. only 'interleukin-10 (chicken)'
+            return None
+        onto = lambda d: ONTOLOGIES.index(d["ontology_name"]) if d.get("ontology_name") in ONTOLOGIES else 99
+        d = min(exact, key=lambda d: (SPECIES_RANK[_species(d.get("label", ""))], onto(d)))
         parents, ancestors = self._hierarchy(d.get("ontology_name", ""), d.get("iri", ""))
         return Concept(d["obo_id"], d.get("label", name),
                        PREFIX_CATEGORY.get(d["obo_id"].split(":")[0].upper(), "unknown"), "ols", 0.9,
@@ -140,6 +219,23 @@ class EntityResolver:
             except Exception:
                 out.append(())
         return out[0], out[1]
+
+
+SPECIES_RANK = {"agnostic": 0, "human": 1, "mouse": 2, "rat": 3, "other": 9}
+
+
+def _species(label: str) -> str:
+    """Protein Ontology labels carry a species suffix, e.g. 'interleukin-10 (chicken)'.
+    Species-agnostic terms come first, then human, mouse, rat; other species are rejected."""
+    m = re.search(r"\(([^()]+)\)\s*$", label)
+    if not m:
+        return "agnostic"
+    tag = m.group(1).lower()
+    for name, words in (("human", ("human", "homo sapiens")), ("mouse", ("mouse", "mus musculus")),
+                        ("rat", ("rat", "rattus norvegicus"))):
+        if tag in words:
+            return name
+    return "other" if re.fullmatch(r"[a-z .]+", tag) else "agnostic"
 
 
 # ── alias consolidation ─────────────────────────────────────────────────────
@@ -298,52 +394,163 @@ def span_is_anchored(span: str, source: str, min_overlap: float = 0.85) -> bool:
                for i in range(0, max(1, len(src_toks) - w + 1)))
 
 
-# ── claim-span consistency ──────────────────────────────────────────────────
+# ── entity parsing ──────────────────────────────────────────────────────────
+# A graph node is an ENTITY. How it was measured (attribute) and where (tissue) are
+# qualifiers on the claim; otherwise "colonic Treg induction", "Treg differentiation" and
+# "bone marrow regulatory T cells" become separate nodes that no pathway can connect.
+PROCESS = r"differentiation|induction|generation|development|conversion|polarization"
 ATTRIBUTE_PATTERNS = [
     (r"\b(?:m?rna |gene |protein )?expression\b|\btranscription\b", "expression"),
-    (r"\b(?:levels?|concentrations?|abundance|amounts?|content|secretion|production|release)\b", "amount"),
+    (rf"\b(?:{PROCESS})\b", "differentiation"),
+    (r"\b(?:levels?|concentrations?|abundance|amounts?|content|secretion|production|release|"
+     r"frequency|frequencies|numbers?|proportions?|percentages?|expansion|accumulation)\b", "amount"),
     (r"\bsignal+ing\b", "activity"),
     (r"\bphosphorylation\b", "modification"),
 ]
+GENERIC = {"cell", "cells", "tissue", "tissues", "gene", "protein", "level", "levels"}
+TISSUES = [
+    (r"colonic|colon", "colon"), (r"small[- ]intestinal|intestinal|gut|ileal|jejunal", "intestine"),
+    (r"peyer['’]?s[- ]patch(?:es)?", "Peyer's patch"), (r"lamina propria", "lamina propria"),
+    (r"splenic|spleen", "spleen"), (r"bone[- ]marrow|bm", "bone marrow"),
+    (r"(?:mesenteric |pancreatic |draining )?lymph[- ]nodes?|mln", "lymph node"),
+    (r"thymic|thymus", "thymus"), (r"peripheral[- ]blood|circulating", "blood"),
+    (r"tumou?r[- ]infiltrating|intratumou?ral", "tumor"), (r"mucosal", "mucosa"),
+    (r"hepatic|liver", "liver"), (r"pulmonary|lung", "lung"), (r"cutaneous|skin", "skin"),
+    (r"synovial", "synovium"), (r"(?:visceral )?adipose", "adipose tissue"),
+]
+_TISSUE_RE = "|".join(f"(?:{p})" for p, _ in TISSUES)
+MODIFIERS = r"de novo|extrathymic|in vitro|in vivo|[\w\-+]+-(?:induced|derived|treated|exposed)"
+PLACEHOLDERS = {"", "not specified", "unspecified", "unknown", "none", "n/a", "na", "not reported",
+                "not applicable", "it", "they", "this", "these", "that", "those"}
+NO_SINGULAR = {"diabetes", "herpes", "series", "species", "lupus", "status", "mumps", "measles", "sepsis"}
 
 
 def split_attribute(surface: str) -> tuple[str, str]:
-    """'IFNG expression' -> ('IFNG', 'expression'). A graph node is the entity; how it was
-    measured is a qualifier on the claim. Cell- and tissue-level phrases are left intact
-    ('T cell activation' is a phenotype, not an attribute of T cells)."""
+    """'IFNG expression' -> ('IFNG', 'expression'); 'Treg differentiation' -> ('Treg',
+    'differentiation'). A phrase whose remainder would be generic ('cell numbers') is kept."""
+    s = clean(surface)
+    m = re.match(rf"^(?:[\w\-]+\s+)?({PROCESS})\s+of\s+(?:the\s+)?(.+)$", s, flags=re.I)
+    if m:
+        return clean(m.group(2)), "differentiation"
     for pat, attr in ATTRIBUTE_PATTERNS:
-        if re.search(pat, surface, flags=re.I):
-            rest = re.sub(pat, " ", surface, flags=re.I)
-            rest = clean(re.sub(r"^\s*of\s+|\s+of\s*$", " ", rest))
-            if len(rest) >= 2 and not re.search(r"\b(cells?|tissues?)\b", rest, flags=re.I):
+        if re.search(pat, s, flags=re.I):
+            rest = clean(re.sub(r"^\s*of\s+|\s+of\s*$", " ", re.sub(pat, " ", s, flags=re.I)))
+            if len(rest) >= 2 and rest.lower() not in GENERIC:
                 return rest, attr
-    return clean(surface), "none"
+    return s, "none"
 
 
+def split_location(surface: str) -> tuple[str, str]:
+    """'Bone marrow, splenic and Peyer's patch regulatory T cells' -> ('regulatory T cells',
+    'bone marrow, spleen, Peyer's patch'); also '... in (the) mesenteric lymph nodes'."""
+    s, found = clean(surface), []
+    while True:
+        m = re.match(rf"^({_TISSUE_RE})(?:\s*,\s*|\s+and\s+|\s+)", s, flags=re.I)
+        if not m or len(s) - m.end() < 2:
+            break
+        found.append(m.group(1))
+        s = s[m.end():]
+    m = re.search(rf"\s+in\s+(?:the\s+)?({_TISSUE_RE})$", s, flags=re.I)
+    if m:
+        found.append(m.group(1))
+        s = s[:m.start()]
+    if not found or clean(s).lower() in GENERIC:
+        return clean(surface), ""
+    names = [next(n for p, n in TISSUES if re.fullmatch(p, f, flags=re.I)) for f in found]
+    return clean(s), ", ".join(dict.fromkeys(names))
+
+
+def entity_of(surface: str) -> tuple[str, str, str]:
+    """surface -> (entity, attribute, tissue)."""
+    rest, attr = split_attribute(surface)
+    rest = clean(re.sub(rf"^(?:{MODIFIERS})\s+", "", rest, flags=re.I)) or rest
+    rest, tissue = split_location(rest)
+    return rest, attr, tissue
+
+
+def singular(name: str) -> str:
+    """Singularize the last word for lookups: 'regulatory T cells' -> 'regulatory T cell'."""
+    words = clean(name).split(" ")
+    w = words[-1]
+    if w.lower() not in NO_SINGULAR and len(w) >= 5 and w[0].isalpha() and w[1:].islower():
+        if w.endswith("ies"):
+            words[-1] = w[:-3] + "y"
+        elif w.endswith("s") and not w.endswith(("ss", "us", "is")):
+            words[-1] = w[:-1]
+    return " ".join(words)
+
+
+def entity_parts(surface: str) -> tuple[list[str], str]:
+    """'NFAT1 and SMAD3' -> (['NFAT1', 'SMAD3'], ''). Only short parts are split, so names
+    such as 'signal transducer and activator of transcription 3' stay whole."""
+    rest, tissue = split_location(surface)
+    parts = [p.strip() for p in re.split(r"\s*,\s*(?:and\s+|or\s+)?|\s+and\s+|\s*/\s*", rest) if p.strip()]
+    if len(parts) < 2 or any(len(p.split()) > 3 or len(p) < 2 for p in parts):
+        return [clean(surface)], ""
+    return parts, tissue
+
+
+def abbreviations(text: str) -> list[tuple[str, str]]:
+    """(abbreviation, preceding words) for every 'long form (ABBR)' in a paper."""
+    out = []
+    for m in re.finditer(r"\(\s*([A-Za-z][A-Za-z0-9\-+]{1,12})\s*\)", text):
+        abbr = m.group(1)
+        if re.search(r"[A-Z]", abbr):
+            words = re.findall(r"[\w\-+]+", text[max(0, m.start() - 160):m.start()])[-(len(abbr) + 3):]
+            out.append((abbr.lower(), " ".join(words).lower()))
+    return out
+
+
+# ── claim-span consistency ──────────────────────────────────────────────────
 STOP = {"the", "and", "with", "cells", "cell", "human", "mouse", "mice", "levels", "level", "expression"}
 NULL_CUE = re.compile(r"\b(?:no|not|never|neither|nor|unchanged|unaffected|without|fail(?:ed|s)?|"
                       r"similar|comparable|independent of)\b")
 NEGATORS = {"no", "not", "never", "neither", "nor", "without", "failed", "fail", "fails"}
 
 
-def _mentioned(surface: str, span: str) -> bool:
+def _named(surface: str, text: str) -> bool:
     words = [w for w in re.findall(r"[a-z0-9+]+", surface.lower()) if w not in STOP]
-    span_words = re.findall(r"[a-z0-9+]+", span.lower())
+    text_words = re.findall(r"[a-z0-9+]+", text.lower())
     long_ = [w for w in words if len(w) >= 3]
     if not long_:                                    # 'pH', 'IL'
-        return any(w in span_words for w in words)
-    return any(any(sw.startswith(w[:4]) for sw in span_words) for w in long_)
+        return any(w in text_words for w in words)
+    return any(any(tw.startswith(w[:4]) for tw in text_words) for w in long_)
 
 
-def check_claim(c, source: str) -> tuple[str, list[str]]:
-    """(drop reason or '', warnings). The quote must exist, name both entities, and agree
-    in polarity with the claimed relation; the structured claim was previously never checked
-    against its own quote."""
+def _mentioned(surface: str, text: str, abbrevs=()) -> bool:
+    """Named directly, or through an abbreviation the paper defines ('sodium butyrate (NaB)')."""
+    if _named(surface, text):
+        return True
+    low, text_low = surface.lower(), text.lower()
+    for abbr, long_form in abbrevs:
+        if _named(surface, long_form) and re.search(rf"\b{re.escape(abbr)}\b", text_low):
+            return True
+        if low == abbr and _named(long_form.split()[-1] if long_form else "", text):
+            return True
+    return False
+
+
+def _previous_sentence(span: str, source: str) -> str:
+    i = _norm(source).find(_norm(span))
+    if i <= 0:
+        return ""
+    before = re.split(r"(?<=[.!?])\s+", _norm(source)[:i].strip())
+    return before[-1] if before else ""
+
+
+def check_claim(c, source: str, abbrevs=()) -> tuple[str, list[str]]:
+    """(drop reason or '', warnings). The quote must exist, name both entities (directly, by
+    a defined abbreviation, or in the sentence just before it), and agree in polarity with
+    the claimed relation."""
+    for role, surface in (("subject", c.subject), ("object", c.object)):
+        if clean(surface).lower() in PLACEHOLDERS:
+            return f"{role} not specified", []
     if not span_is_anchored(c.span, source):
         return "quote not found in source", []
     span = c.span.lower().replace("n't", " not")
+    context = _previous_sentence(c.span, source) + " " + span
     for role, surface in (("subject", c.subject), ("object", c.object)):
-        if not _mentioned(surface, span):
+        if not _mentioned(surface, context, abbrevs):
             return f"{role} not named in quote", []
     rel = c.relation.lower().replace("n't", " not")
     if NULL_CUE.search(rel):

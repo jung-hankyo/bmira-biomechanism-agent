@@ -10,7 +10,9 @@ class Settings:
         "anthropic": {"reasoning": "claude-sonnet-5", "cheap": "claude-haiku-4-5-20251001"},
     })
     # retrieval
-    max_papers_per_query: int = 20
+    max_papers_per_query: int = 20               # coverage round
+    max_papers_per_target_query: int = 5         # targeted rounds: reading capacity is the limit
+    min_relevance: int = 50                      # screening score (0-100) needed for inclusion
     max_extract_per_round: int = 10               # top-N by relevance; the rest wait, they are not dropped
     max_claims_per_paper: int = 8
     fulltext_char_limit: int = 60000
@@ -50,10 +52,15 @@ class Settings:
     # A task missing here, or None, uses the model's default effort. Classification tasks
     # run low; tasks that read papers or write the report run medium.
     reasoning_effort: dict = field(default_factory=lambda: {
-        "screen": "low", "entity": "low", "relation": "low", "alias": "low", "pair": "low",
+        "screen": "low", "entity": "low", "entities": "low", "relation": "low", "alias": "low", "pair": "low",
         "conflict": "low", "entailment": "low", "chat": "low", "preflight": "low",
         "parse": "medium", "plan": "medium", "extract": "medium", "seed": "medium",
         "expand": "medium", "synthesize": "medium"})
+    # Classification tasks run on the cheap model whatever the call site asks for.
+    cheap_tasks: tuple = ("screen", "entity", "entities", "relation", "alias", "pair",
+                          "conflict", "entailment", "preflight")
+    # Directory for caches reused across runs (entity resolutions); None = no disk cache.
+    cache_dir: str | None = None
     # Soft token budget per run (input + output over all tasks), checked between rounds:
     # when reached, searching stops and the report is written from what was found.
     # None = no cap. Also set a hard spend limit at the provider as the real backstop.

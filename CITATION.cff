@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: "B-MiRA: Biomedical Mechanism Inference Research Agent"
 type: software
-version: 2.3.0
+version: 2.4.0
 date-released: 2026-10-03
 license: MIT
 repository-code: "https://github.com/jung-hankyo/bmira-biomechanism-agent"
