@@ -1166,3 +1166,23 @@ def test_one_bad_screening_reply_does_not_discard_the_paid_batch():
     llm._for = lambda task, role: SimpleNamespace(with_structured_output=lambda *a, **k: SimpleNamespace(batch=batch))
     assert llm.structured_many("screen", Screen, "s", ["a", "b", "c"]) == [ok, None, None]
     assert llm.failures["screen"] == 2
+
+
+def test_citations_after_the_period_stay_with_their_sentence():
+    """Pilot6's synthesis wrote 'text. [C1_0][C2_0] **[L5] ...' - split naively, each tag block cited the NEXT
+    sentence, so 6 overclaims and 8 of 13 entailment issues were judged against the wrong claims."""
+    import re
+    from bmira.evidence import prose_sentences
+    text = ("- **[L3] Butyrate → FAO; [L4] FAO → induced Tregs:** Single-study, weak findings associate butyrate "
+            "with higher FAO. [C1_0][C2_0] Test FAO inhibition during butyrate exposure. [C1_0][C2_0]\n"
+            "- **[L5] Butyrate → HIF-1α:** Butyrate reduces HIF-1α in primary human T cells. [C3_0]\n"
+            "- The reported increases differ from no-effect findings. [C3_0]")
+    sents = prose_sentences(text)
+    assert [re.findall(r"\[(C\d_0)\]", s) for s in sents if "C" in s] == [["C1_0", "C2_0"], ["C1_0", "C2_0"], ["C3_0"], ["C3_0"]]
+    assert sents[0].startswith("**[L3]") and "Test FAO" not in sents[0] and sents[2].startswith("**[L5]")
+    claims = [_claim("C1_0", "p1", "increases", grade="weak"), _claim("C2_0", "p1", "increases", grade="weak"),
+              _claim("C3_0", "p2", "decreases", grade="moderate")]
+    out = verify_text(text, claims, [])["overclaims"]
+    assert out == []                       # 'induced' in a link label is no verb; 'reported increases' is a noun
+    bad = verify_text("Butyrate increases FAO. [C1_0]", claims, [])["overclaims"]
+    assert len(bad) == 1                   # a weak claim may still not say 'increases'

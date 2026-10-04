@@ -172,7 +172,8 @@ DENIED = re.compile(r"\b(?:is|are|was|were|has been|have been|remains?)\s+not\s+
                     r"(?:identified|established|shown|demonstrated|observed|found)\b")
 # 'the Treg increase itself', 'a decrease': the change word is a noun here
 # ponytail: also masks 'the data increase Tregs' (a plural verb after one word); rare, and a verb check needs a parser
-NOUN_CHANGE = re.compile(r"\b(?:the|an?|this|its|their|any)\s+(?:[\w-]+\s+)?(?:increase|decrease|reduction|elevation)\b")
+NOUN_CHANGE = re.compile(r"\b(?:the|an?|this|its|their|any)\s+(?:[\w-]+\s+)?(?:increase|decrease|reduction|elevation)\b|"
+                         r"\b(?:reported|observed|these|those|such)\s+(?:increases|decreases|reductions|elevations)\b")
 # what follows these is mentioned, not asserted: 'do not establish that X induces Y', 'would need to test'
 NOT_ASSERTED = re.compile(r"\b(?:do|does|did|can|could)\s*not\s+(?:establish|show|demonstrate|prove|support|"
                           r"confirm|indicate|imply|identify|reveal)\b|\bneeds? to\b|\bwhether\b")
@@ -184,9 +185,13 @@ IMPERATIVE = re.compile(r"^\W*(?:source-trace|trace|test|measure|compare|knock\s
                         r"repeat|assess|determine|quantify|isolate|stratify|randomi[sz]e)\b")
 
 
+# '**[L4] FAO -> induced Tregs:**' names a link; it is a heading, not a statement ('induced' is no verb there)
+LINK_LABEL = re.compile(r"\*\*\s*\[[HL]\d+\][^*]*\*\*")
+
+
 def sentence_tier(sentence: str) -> int:
     """Strongest verb tier; a verb negated within three words reads as a null statement."""
-    s, best = re.sub(r"\[[A-Za-z0-9_\-]+\]", " ", sentence.lower()), 0
+    s, best = re.sub(r"\[[A-Za-z0-9_\-]+\]", " ", LINK_LABEL.sub(" ", sentence).lower()), 0
     if IMPERATIVE.match(s):
         return 0
     s = re.sub(r"\*+|(?<!\w)_|_(?!\w)", "", s)          # markdown emphasis: '*induced* Tregs' is a cell name
@@ -209,9 +214,14 @@ def claim_cap(c) -> int:
     return min(cap, 1) if c.relation_norm in ASSOCIATIVE_RELATIONS else cap
 
 
+# 'It increases X. [C1][C2] Next sentence': the model puts tags after the period; split naively they
+# would cite the NEXT sentence (pilot6: 8 of 13 entailment issues were judged against the wrong claims)
+TRAILING_TAGS = re.compile(r"([.!?]\**)((?:\s*\[(?:C\d+_\d+|NO_EVIDENCE)\])+)")
+
+
 def prose_sentences(text: str) -> list[str]:
     lines, fence = [], False
-    for raw in text.splitlines():
+    for raw in TRAILING_TAGS.sub(lambda m: m[2] + m[1], text).splitlines():
         line = raw.strip()
         if line.startswith("```"):
             fence = not fence
@@ -219,7 +229,7 @@ def prose_sentences(text: str) -> list[str]:
         if fence or not line or line.startswith("#") or line.startswith("|"):
             continue
         lines.append(re.sub(r"^(?:[-*+]\s+|\d+[.)]\s+)", "", line))
-    return [s.strip() for s in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\[])", " ".join(lines)) if s.strip()]
+    return [s.strip() for s in re.split(r"(?:(?<=[.!?])|(?<=[.!?]\*\*))\s+(?=[A-Z0-9\[*])", " ".join(lines)) if s.strip()]
 
 
 def verify_text(text: str, claims: list, required_tags: list[str]) -> dict:
