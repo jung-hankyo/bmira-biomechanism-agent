@@ -286,6 +286,7 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "claims_per_extracted_paper": _share(len(claims), len(read)),
             "claim_types": _count(c.claim_type for c in claims), "systems": _count(c.system for c in claims),
             "attributes": _count([c.subject_attribute for c in claims] + [c.object_attribute for c in claims]),
+            "subject_lost": sum(c.subject_lost for c in claims),       # loss-of-function claims, relation restated
             "method_fields_uncredited": _count(m for c in claims for m in c.method_checks),
             "uncredited_samples": [{"id": c.id, "checks": c.method_checks, "span": c.span[:160]}
                                    for c in claims if c.method_checks][:10],

@@ -48,6 +48,11 @@ class ParsedQuestion(BaseModel):
         "up", description="down if the question is about a decrease, loss or deficiency of the exposure")
     expected_direction: Literal["up", "down", "none", "unknown"] = Field(
         "unknown", description="Direction the question asserts for the exposure CHANGE -> outcome")
+    exposure_members: list[str] = Field(default_factory=list, description=(
+        "If the exposure is a class or group, up to 6 specific members as bare names; otherwise empty"))
+    in_scope: bool = Field(True, description=(
+        "False if this is not a question the biomedical literature can answer as exposure -> outcome"))
+    scope_note: str = Field("", description="One sentence: why the question is out of scope")
 
 
 class SearchQuery(BaseModel):
@@ -102,6 +107,10 @@ class ExtractedClaim(BaseModel):
     context_dose: str = ""
     context_timepoint: str = ""
     perturbation_class: PERTURBATIONS = "none"
+    subject_lost: bool = Field(False, description=(
+        "True when the subject is knocked out or down, deleted, depleted, inhibited or absent in this "
+        "experiment ('Gpr109a-/- mice', 'X-deficient cells', 'mice lacking X') and the relation states "
+        "what that LOSS did"))
     rescue_arm: bool = False
     orthogonal_validation: bool = False
     comparator_present: bool = False

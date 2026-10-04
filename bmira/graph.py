@@ -18,7 +18,7 @@ from langgraph.types import Send, interrupt
 
 from bmira import portfolio as pf
 from bmira.config import Settings
-from bmira.evidence import grade_claim, prose_sentences, verify_text
+from bmira.evidence import grade_claim, is_proposal, prose_sentences, verify_text
 from bmira.llm import PROMPTS
 from bmira.evidence import claim_study_type, verify_methods
 from bmira.normalize import (EntityResolver, abbreviations, check_claim, consolidate_aliases, expand_abbreviations,
@@ -105,12 +105,22 @@ class State(TypedDict, total=False):
 def parse(state, rt):
     p = rt.llm.structured("parse", ParsedQuestion, PROMPTS["parse"], state["question"],
                           ctx={"question": state["question"]})
+    if not p.in_scope:                                     # no search, no cost: say why and stop
+        print(f"[parse][WARN] question out of scope: {p.scope_note}")
+        return {"parsed": p, "round_idx": 0, "report": (
+            f"This question was not investigated: {p.scope_note or 'it is not an exposure-outcome question'} "
+            "B-MiRA answers 'does X affect Y, and through which mechanisms?' from PubMed literature.")}
     bare, change = split_change(p.exposure)                # 'NAD+ decline' -> 'NAD+', exposure_change down
     p = p.model_copy(update={"exposure": bare, "exposure_change": change or p.exposure_change})
     exp, out = rt.resolver.resolve(entity_of(p.exposure)[0]), rt.resolver.resolve(entity_of(p.outcome)[0])
     readouts = [rt.resolver.resolve(entity_of(x)[0]) for x in p.outcome_readouts]
+    for name in p.exposure_members:     # papers name 'empagliflozin', the question says 'SGLT2 inhibitors': one node
+        m = rt.resolver.resolve(entity_of(name)[0])
+        if m.id != exp.id:
+            rt.resolver.alias[m.id] = exp.id
     print(f"[parse] exposure={exp.label} outcome={out.label} readouts={[r.label for r in readouts]} "
-          f"expected={p.expected_direction} exposure_change={p.exposure_change} population={p.target_system}")
+          f"members={p.exposure_members} expected={p.expected_direction} exposure_change={p.exposure_change} "
+          f"population={p.target_system}")
     return {"parsed": p, "exposure": exp.id, "outcome": out.id, "round_idx": 0, "targets": [],
             "outcome_ids": [out.id] + [r.id for r in readouts]}
 
@@ -368,8 +378,9 @@ def normalize(state, rt):
                     c.relation_confidence = r.confidence
         except Exception as e:
             print(f"[relation] batch failed ({type(e).__name__}); claims stay pending for retry")
-    for c in fresh:      # 'Tet2 loss increases IL-6' is 'Tet2 decreases IL-6' for the bare entity
-        if c.relation_norm in DIRECTION and (entity_change(c.subject) == "down") != (entity_change(c.object) == "down"):
+    for c in fresh:      # 'Tet2 loss increases IL-6' and 'Gpr109a-/- mice show fewer DCs' are 'Tet2 decreases IL-6'
+        lost = c.subject_lost or entity_change(c.subject) == "down"      # for the bare entity; one flip, not two
+        if c.relation_norm in DIRECTION and lost != (entity_change(c.object) == "down"):
             c.relation_norm = "decreases" if c.relation_norm == "increases" else "increases"
     forms = _long_forms(state)
     rt.resolver.resolve_many([entity_of(e)[0] for c in claims for e in _surfaces(c)]
@@ -650,7 +661,7 @@ def _entailment(text, claims, rt):
     sents = prose_sentences(text)
     items = [(i, s, [x for x in re.findall(r"\[([A-Za-z0-9_\-]+)\]", s) if x in by_id])
              for i, s in enumerate(sents)]
-    items = [x for x in items if x[2]]
+    items = [x for x in items if x[2] and not is_proposal(x[1])]      # a proposed experiment is not entailed by claims
     if not items:
         return []
     user = "\n\n".join(f"[SENTENCE {i}] {s}\nCited:\n" + "\n".join(
@@ -717,7 +728,8 @@ def build_agent(rt: Runtime, checkpointer=None):
                      ("verify", verify)]:
         g.add_node(name, partial(fn, rt=rt))
     g.add_edge(START, "parse")
-    g.add_edge("parse", "plan")
+    g.add_conditional_edges("parse", lambda s: "plan" if _as(ParsedQuestion, s["parsed"]).in_scope else END,
+                            ["plan", END])
     g.add_edge("plan", "search")
     g.add_edge("search", "screen")
     g.add_conditional_edges("screen", partial(fan_out, rt=rt), ["extract", "normalize"])

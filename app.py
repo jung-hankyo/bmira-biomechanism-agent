@@ -121,10 +121,13 @@ if prompt:
         if ss.run is None or new:
             if not question:
                 raise ValueError("Type a question after /new.")
-            final, ss.rt, info = investigate(question if live else DEMO_QUESTION)
-            ss.run, ss.metrics = final, summarize(final, ss.rt, info)
-            msg = {"role": "assistant", "content": summary(final), "rows": portfolio_rows(final),
-                   "report": final["report"], "log": info["log"]}
+            final, rt, info = investigate(question if live else DEMO_QUESTION)
+            if "links" not in final:             # out of scope: stopped after parsing, nothing to follow up on
+                msg = {"role": "assistant", "content": final.get("report") or "No investigation was run."}
+            else:
+                ss.run, ss.rt, ss.metrics = final, rt, summarize(final, rt, info)
+                msg = {"role": "assistant", "content": summary(final), "rows": portfolio_rows(final),
+                       "report": final["report"], "log": info["log"]}
         else:
             with st.spinner("Reading the run's evidence…"):
                 reply, issues = answer(ss.run, ss.rt, question, ss.messages[:-1])

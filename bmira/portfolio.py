@@ -338,9 +338,13 @@ def evaluate(hyps, links, categories, expected, settings):
             h.status, h.reason = "supported", "every step has independent support"
         else:
             weakest = gap or min(ls, key=lambda ln: ln.completeness)
-            h.status, h.reason = "insufficient", f"{step(weakest)}: {weakest.reason}"
+            done = sum(ln.status == "supported" for ln in ls)
+            h.status, h.reason = "insufficient", f"{step(weakest)}: {weakest.reason}" + (
+                f" ({done} of {len(ls)} steps supported)" if done and len(ls) > 1 else "")
         h.open = h.status == "insufficient" and gap is None
-    hyps.sort(key=lambda h: (-h.score, h.id))
+    # the score is gated by the weakest step, so on sparse literature every route scores 0: order those by progress
+    progress = {h.id: sum(links[k].completeness for k in h.links) / max(1, len(h.links)) for h in hyps}
+    hyps.sort(key=lambda h: (-h.score, -progress[h.id], h.id))
     keep = [h for h in hyps if h.status == "supported"]
     rest = [h for h in hyps if h.status != "supported"]
     room = max(0, settings.max_hypotheses - sum(not is_direct(h) for h in keep))

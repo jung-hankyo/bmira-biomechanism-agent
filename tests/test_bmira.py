@@ -1215,3 +1215,102 @@ def test_a_fan_shaped_expansion_is_reduced_to_its_connected_chain():
     assert pf.as_chain(["A|increases|Z"]) == ["A|increases|Z"]
     # a shortcut must not replace the mechanism: keep the route through the most proposed steps
     assert pf.as_chain(["A|increases|M", "A|increases|Z", "M|increases|Z"]) == ["A|increases|M", "M|increases|Z"]
+
+
+def test_a_lost_subject_is_restated_to_its_normal_role():
+    """Pilot7: 'Mice lacking GPR109A showed fewer CD103+ DCs' was stored as 'GPR109A decreases CD103+ DCs'
+    (about 8 of 19 loss-of-function claims in pilots 6-7 had the sign inverted)."""
+    from bmira.evidence import verify_methods
+    from bmira.graph import normalize
+    from bmira.schemas import ParsedQuestion
+    rt, _ = offline_runtime()
+    parsed = ParsedQuestion(population_model="m", exposure="butyrate", comparator="c", outcome="o",
+                            mechanism_hypothesis="h")
+    span = "Mice lacking GPR43 or GPR109A, receptors for SCFAs, showed exacerbated food allergy and fewer CD103(+) DCs."
+    c = _claim("c1", "p", "")
+    c.subject, c.object, c.relation, c.relation_raw, c.span, c.subject_lost = "GPR109A", "CD103+ DCs", "reduced", "reduced", span, True
+    assert verify_methods(c, span).subject_lost                                  # 'lacking' is the wording that earns the flag
+    out = normalize({"claims": [c], "parsed": parsed}, rt)["claims"]
+    assert out[0].relation_norm == "increases"                                   # GPR109A promotes CD103+ DCs
+    assert normalize({"claims": out, "parsed": parsed}, rt)["claims"][0].relation_norm == "increases"   # once
+
+    both = _claim("c2", "p", "")                       # 'Tet2 loss' AND the flag: still one flip
+    both.subject, both.object, both.relation, both.relation_raw, both.subject_lost = "Tet2 loss", "IL-6", "increased", "increased", True
+    assert normalize({"claims": [both], "parsed": parsed}, rt)["claims"][0].relation_norm == "decreases"
+
+    plain = _claim("c3", "p", "")                      # a flag with no loss wording in the quote is not believed
+    plain.subject, plain.relation_raw, plain.span, plain.subject_lost = "GPR109A", "increased", "GPR109A increased colonic Tregs in mice.", True
+    assert not verify_methods(plain, plain.span).subject_lost and "subject_lost not evidenced" in plain.method_checks
+
+
+def test_verifier_false_alarms_from_pilot7():
+    """Pilot7's 11 overclaims: 4 were 'a test is missing' sentences, 1 a 'none of the routes establishes' sentence,
+    2 read the noun 'induction' as a verb; both 'unsupported' entailment verdicts judged proposed experiments."""
+    from bmira.evidence import is_proposal
+    absent = ["An experiment establishing that the proposed acetylation change increases FOXP3 is also missing [NO_EVIDENCE].",
+              "A test showing that those macrophages increase colonic Tregs is missing [NO_EVIDENCE]."]
+    assert not verify_text(" ".join(absent), [], [])["overclaims"]
+    assert verify_text("Butyrate increases colonic Tregs [NO_EVIDENCE].", [], [])["overclaims"]      # still an assertion
+    assert sentence_tier("FOXP3 is a supported accompanying response, but none of the proposed multi-step routes "
+                         "establishes that its intermediate steps are necessary for Treg induction [NO_EVIDENCE].") == 0
+    assert sentence_tier("IL-10 findings differ across settings; measure IL-10 and Tregs together rather than "
+                         "treating IL-10 as a proxy for induction.") == 0
+    assert sentence_tier("An IL-10 increase is therefore not a uniform explanation for Treg induction.") == 0
+    assert sentence_tier("Butyrate induces Tregs.") == 4 and sentence_tier("Butyrate is an inducer of Tregs.") == 4
+    assert is_proposal("For mechanism, prioritize butyrate exposure with receptor loss and restoration [C1].")
+    assert is_proposal("Compare matched naive-CD4+ cultures with and without TGF-b1 [C1][C2].")
+    assert not is_proposal("In mice, butyrate increases Tregs [C1].")
+
+    from types import SimpleNamespace
+    from bmira.graph import _entailment
+    from bmira.schemas import EntailmentBatch
+    seen = []
+
+    class LLM:
+        def structured(self, task, schema, system, user, **kw):
+            seen.append(user)
+            return EntailmentBatch(judgements=[])
+    c = _claim("C1", "p", "increases")
+    _entailment("Compare matched cultures with and without TGF-b1 [C1].", [c], SimpleNamespace(llm=LLM()))
+    assert not seen                                                  # a proposal is not sent to the judge
+
+
+def test_unfinished_routes_rank_by_progress_and_say_how_many_steps_hold():
+    from bmira.schemas import LinkEvidence
+    k1, k2, k3, k4 = (pf.link_key(*t) for t in (("E", "increases", "M"), ("M", "increases", "O"),
+                                                 ("E", "increases", "N"), ("N", "increases", "O")))
+    ev = lambda k, comp, st: LinkEvidence(key=k, subject=k.split("|")[0], relation="increases", object=k.split("|")[2],
+                                          completeness=comp, status=st, reason="r")
+    links = {k1: ev(k1, .7, "supported"), k2: ev(k2, 0, "insufficient"), k3: ev(k3, 0, "insufficient"),
+             k4: ev(k4, 0, "insufficient")}
+    h1 = Hypothesis(id="H1", name="n", origin="llm_seed", links=[k3, k4])
+    h2 = Hypothesis(id="H2", name="n", origin="llm_seed", links=[k1, k2])
+    out = pf.evaluate([h1, h2], links, {}, "up", Settings())
+    assert [h.id for h in out] == ["H2", "H1"]                       # both score 0; H2 has one step done
+    assert "1 of 2 steps supported" in out[0].reason and "steps supported" not in out[1].reason
+
+
+def test_out_of_scope_question_stops_before_any_search():
+    rt, sc = offline_runtime()
+    sc["parsed"] = {**sc["parsed"], "in_scope": False, "scope_note": "It asks for a personal treatment decision."}
+    from bmira.telemetry import execute, summarize
+    final, info = execute("Should I take metformin tonight?", rt, echo=False)
+    assert "not investigated" in final["report"] and "personal treatment decision" in final["report"]
+    assert rt.llm.calls["plan"] == 0 and not final.get("papers") and info["status"] == "completed"
+    assert summarize(final, rt, info)["report"] == final["report"]          # the session file still gets a row
+
+
+def test_exposure_members_share_the_exposure_node():
+    """A question about 'SGLT2 inhibitors' meets papers about 'empagliflozin'."""
+    from types import SimpleNamespace
+    from bmira.graph import parse
+    from bmira.schemas import ParsedQuestion
+
+    class LLM:
+        def structured(self, task, schema, system, user, role="reasoning", ctx=None, n_items=1):
+            return ParsedQuestion(population_model="patients", exposure="SGLT2 inhibitors", comparator="placebo",
+                                  outcome="heart failure hospitalization", mechanism_hypothesis="h",
+                                  exposure_members=["empagliflozin", "dapagliflozin"])
+    rt = SimpleNamespace(llm=LLM(), resolver=EntityResolver(Settings(ontology_provider="off")))
+    out = parse({"question": "q"}, rt)
+    assert rt.resolver.resolve("empagliflozin").id == out["exposure"] == rt.resolver.resolve("dapagliflozin").id

@@ -52,6 +52,9 @@ METHOD_CUES = {
     "transfer": r"transfer|adoptive|transplant",
     "genetic_association": r"variant|polymorphism|snp|allele|gwas|mendelian",
 }
+# 'Mice lacking GPR43 ... showed fewer DCs', 'HIF1α deficiency results in impairment': the subject is the thing lost
+LOSS_CUE = (METHOD_CUES["knockout"] + "|" + METHOD_CUES["knockdown"] +
+            r"|\black|\bloss\b|absen|deplet|ablat|abrogat|inhibit|block|antagon|disrupt|without")
 RESCUE_CUE = r"rescu|restor|re-?express|reconstitut|add-?back"
 ORTHOGONAL_CUE = r"independent|orthogonal|second|alternative|validat|confirm"
 COMPARATOR_CUE = (r"compar|versus|\bvs\.?|relative to|than|control|wild-?type|\bwt\b|vehicle|untreated|baseline|"
@@ -69,6 +72,9 @@ def verify_methods(c, source: str):
     if c.perturbation_class != "none" and not re.search(METHOD_CUES[c.perturbation_class], text):
         checks.append(f"perturbation '{c.perturbation_class}' not evidenced")
         c.perturbation_class = "none"
+    if c.subject_lost and not re.search(LOSS_CUE, text):          # the flag turns the relation around: it needs wording
+        checks.append("subject_lost not evidenced")
+        c.subject_lost = False
     for field, cue in (("rescue_arm", RESCUE_CUE), ("orthogonal_validation", ORTHOGONAL_CUE),
                        ("comparator_present", COMPARATOR_CUE)):
         if getattr(c, field) and not re.search(cue, text):
@@ -146,7 +152,8 @@ VERB_TIER = {
     3: [r"\bpromot\w*", r"\binhibit\w*", r"\benhanc\w*", r"\breduc\w*", r"\bimpair\w*",
         r"\bsuppress\w*", r"\battenuat\w*", r"\baugment\w*", r"\bmodulat\w*",
         r"\bincreas\w*", r"\bdecreas\w*", r"\belevat\w*", r"\blower\w*", r"\bdeplet\w*"],
-    4: [r"\bcause[sd]?\b", r"\bdrive[sn]?\b", r"\bdrove\b", r"\binduc\w*", r"\btrigger\w*",
+    # 'induction' is a noun in 'a uniform explanation for Treg induction'; the verb forms stay
+    4: [r"\bcause[sd]?\b", r"\bdrive[sn]?\b", r"\bdrove\b", r"\binduc(?!tion)\w*", r"\btrigger\w*",
         r"\babolish\w*", r"\bmediat(?:e[sd]?|ing|ion)\b", r"\brequired for\b", r"\bnecessary for\b",   # not 'mediator'
         r"\bsufficient\b", r"\blead(?:s|ing)? to\b"],
 }
@@ -176,17 +183,32 @@ NOUN_CHANGE = re.compile(r"\b(?:the|an?|this|its|their|any)\s+(?:[\w-]+\s+)?(?:i
                          r"\b(?:reported|observed|these|those|such)\s+(?:increases|decreases|reductions|elevations)\b")
 # what follows these is mentioned, not asserted: 'do not establish that X induces Y', 'would need to test'
 NOT_ASSERTED = re.compile(r"\b(?:do|does|did|can|could)\s*not\s+(?:establish|show|demonstrate|prove|support|"
-                          r"confirm|indicate|imply|identify|reveal)\b|\bneeds? to\b|\bwhether\b")
+                          r"confirm|indicate|imply|identify|reveal)\b|\bneeds? to\b|\bwhether\b|"
+                          r"\b(?:none|neither|no\s+(?:study|studies|experiment|route|pathway|paper|evidence))\b"
+                          r"[^.;]{0,80}?\b(?:establish|show|demonstrat|prove|support|confirm|indicat|identif|reveal)\w*")
+# 'A test showing that X increases Y is missing [NO_EVIDENCE]': the sentence declares an absence, whatever
+# verb the missing thing would contain. Used only for sentences that cite [NO_EVIDENCE] and no claim.
+ABSENCE = re.compile(r"\b(?:missing|untested|unexamined|unstudied|unproven|unknown|unclear|unresolved|absent|lacking)\b|"
+                     r"\bnot\s+(?:yet\s+)?(?:been\s+)?(?:tested|examined|studied|shown|established|demonstrated|"
+                     r"identified|reported)\b|\bno\s+(?:study|studies|experiment|test|paper|trial|evidence|data|report)\b|"
+                     r"\b(?:none|neither)\b|\b(?:lack|absence)\s+of\b")
 
 
 # 'Source-trace microbial butyrate while measuring Treg induction, and test whether ...': a proposed
-# experiment, not a finding. Only at the start of the sentence.
-IMPERATIVE = re.compile(r"^\W*(?:source-trace|trace|test|measure|compare|knock\s+(?:out|down)|block|delete|run|perform|treat|"
-                        r"repeat|assess|determine|quantify|isolate|stratify|randomi[sz]e)\b")
+# experiment, not a finding. Only at the start of the sentence, after an optional lead-in ('For mechanism, ').
+IMPERATIVE = re.compile(r"^\W*(?:(?:for|to|in|with|when|next|then|first|finally|also)\b[^,.;]{0,60},\s*)?"
+                        r"(?:source-trace|trace|test|measure|compare|knock\s+(?:out|down)|block|delete|run|perform|treat|"
+                        r"repeat|assess|determine|quantify|isolate|stratify|randomi[sz]e|prioriti[sz]e|examine|"
+                        r"evaluate|validate|confirm|replicate|conduct|combine|pair)\b")
 
 
 # '**[L4] FAO -> induced Tregs:**' names a link; it is a heading, not a statement ('induced' is no verb there)
 LINK_LABEL = re.compile(r"\*\*\s*\[[HL]\d+\][^*]*:\*\*")      # a label ends with a colon; a bold claim does not
+
+
+def is_proposal(sentence: str) -> bool:
+    """A suggested experiment ('Compare matched cultures ...'): nothing to verify or to entail."""
+    return bool(IMPERATIVE.match(re.sub(r"\[[A-Za-z0-9_\-]+\]", " ", LINK_LABEL.sub(" ", sentence).lower())))
 
 
 def sentence_tier(sentence: str) -> int:
@@ -241,7 +263,7 @@ def verify_text(text: str, claims: list, required_tags: list[str]) -> dict:
         ids = [t for t in tags if not STRUCTURE_TAG.match(t)]
         if not ids:
             if "NO_EVIDENCE" in tags:
-                if sentence_tier(sent) > 1:
+                if sentence_tier(sent) > 1 and not ABSENCE.search(sent.lower()):
                     overclaims.append({"sentence": sent, "used": sentence_tier(sent), "allowed": 1})
             elif len(sent.split()) >= 5:
                 uncited.append(sent)
