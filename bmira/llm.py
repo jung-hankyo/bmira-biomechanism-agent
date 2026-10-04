@@ -110,7 +110,9 @@ PROMPTS = {
     "expand": (
         "The evidence ledger contains intermediates that no current pathway uses. If any of "
         "them suggests a distinct, biologically coherent route from exposure to outcome, "
-        "propose at most ONE new pathway using it. Return an empty list otherwise."),
+        "propose at most ONE new pathway using it. A pathway is an ordered chain: each link starts where "
+        "the previous one ends, and the last link ends at the outcome or one of its readouts. Put side "
+        "branches in the rationale, not in the links. Return an empty list otherwise."),
     "synthesize": (
         "Write a calibrated research synthesis in English for a ranked portfolio of candidate "
         "pathways.\nHARD CONSTRAINTS (checked automatically):\n"

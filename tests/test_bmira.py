@@ -1195,3 +1195,14 @@ def test_activity_is_an_attribute_so_a_seeded_node_meets_the_claims():
     assert entity_of("histone deacetylase activity") == ("histone deacetylase", "activity", "")
     assert entity_of("HDAC activity")[:2] == ("HDAC", "activity")
     assert entity_of("activity")[1] == "none" and entity_of("NF-kB signaling")[:2] == ("NF-kB", "activity")
+
+
+def test_a_fan_shaped_expansion_is_reduced_to_its_connected_chain():
+    """Pilot6's H7: butyrate->HIF, HIF->Th17, HIF->Treg was flagged 'steps do not connect' and failed on
+    the Th17 side branch; the chain butyrate->HIF->Treg is Supported."""
+    fan = ["B|decreases|HIF", "HIF|increases|TH17", "HIF|decreases|TREG"]
+    assert pf.as_chain(fan) == ["B|decreases|HIF", "HIF|decreases|TREG"]
+    chain = ["A|increases|M", "M|increases|Z"]
+    assert pf.as_chain(chain) == chain
+    assert pf.as_chain(["A|increases|M", "X|increases|Z"]) == ["A|increases|M", "X|increases|Z"]   # no route: unchanged
+    assert pf.as_chain(["A|increases|Z"]) == ["A|increases|Z"]
