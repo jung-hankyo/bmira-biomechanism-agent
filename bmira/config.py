@@ -54,7 +54,7 @@ class Settings:
     reasoning_effort: dict = field(default_factory=lambda: {
         "screen": "low", "entity": "low", "entities": "low", "relation": "low", "alias": "low", "pair": "low",
         "conflict": "low", "entailment": "low", "chat": "low", "preflight": "low",
-        "parse": "medium", "plan": "medium", "extract": "medium", "seed": "medium",
+        "parse": "medium", "plan": "medium", "extract": "low", "seed": "medium",
         "expand": "medium", "synthesize": "medium"})
     # Classification tasks run on the cheap model whatever the call site asks for.
     cheap_tasks: tuple = ("screen", "entity", "entities", "relation", "alias", "pair",

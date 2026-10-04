@@ -402,7 +402,7 @@ def test_effort_retries_and_cost():
         llm._for("screen", "cheap")
         assert seen[-1]["reasoning_effort"] == "low" and seen[-1]["max_retries"] == 6
         llm._for("extract", "reasoning")
-        assert seen[-1]["reasoning_effort"] == "medium" and llm.model_of["extract"] == Settings().models["openai"]["reasoning"]
+        assert seen[-1]["reasoning_effort"] == "low" and llm.model_of["extract"] == Settings().models["openai"]["reasoning"]
     finally:
         del sys.modules["langchain_openai"]
     assert estimate_cost("gpt-6-sol", 1_000_000, 100_000, Settings().prices) == 3.0
