@@ -50,7 +50,7 @@ class Settings:
     llm_timeout_s: float = 180.0
     # Reasoning effort per task for OpenAI reasoning models (ignored for Anthropic).
     # A task missing here, or None, uses the model's default effort. Classification tasks
-    # run low; tasks that read papers or write the report run medium.
+    # run low, and so does extraction (A/B it against medium on a fixed paper set); the rest run medium.
     reasoning_effort: dict = field(default_factory=lambda: {
         "screen": "low", "entity": "low", "entities": "low", "relation": "low", "alias": "low", "pair": "low",
         "conflict": "low", "entailment": "low", "chat": "low", "preflight": "low",
