@@ -28,19 +28,31 @@ ROOT = Path(__file__).resolve().parent.parent
 NULLS = {"no_effect", "not_associated"}
 
 
-def load(states):
+def load(states, settings, cache):
+    """Papers read in ALL the saved runs, with their real text. State files blank `source_text` to stay
+    small, so the text is fetched again (PubMed abstract, Europe PMC full text when open) and cached, so
+    that both arms and every repeat read identical text."""
+    from bmira.sources import PubMedSource
     docs = [json.load(open(p, encoding="utf-8"))["state"] for p in states]
-    claimed = [{c["pmid"] for c in d["claims"]} for d in docs]
-    shared = sorted(set.intersection(*claimed))
-    papers = {p["pmid"]: Paper.model_validate(p) for p in docs[-1]["papers"]}
-    return docs[-1]["question"], [papers[x] for x in shared if x in papers]
+    shared = sorted(set.intersection(*[{c["pmid"] for c in d["claims"]} for d in docs]))
+    if cache.exists():
+        papers = [Paper.model_validate(x) for x in json.loads(cache.read_text(encoding="utf-8"))]
+        if [p.pmid for p in papers] == shared:
+            return docs[-1]["question"], papers
+    src = PubMedSource(settings)
+    papers = [src.fulltext(p) for p in src.fetch(shared)]
+    cache.write_text(json.dumps([p.model_dump() for p in papers], ensure_ascii=False), encoding="utf-8")
+    return docs[-1]["question"], papers
 
 
 def run_once(rt, paper, question):
     payload = {"paper": paper, "question": question, "focus": [], "focus_keys": [], "n_existing": 0,
                "seen": set(), "round": 1}
-    with contextlib.redirect_stdout(io.StringIO()):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
         out = extract(payload, rt)
+    if "failed" in buf.getvalue():            # extract() swallows model errors and returns {}
+        raise RuntimeError(buf.getvalue().strip()[:200])
     return out.get("claims", []), out.get("dropped_claims", [])
 
 
@@ -80,14 +92,17 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     s = Settings(provider=a.provider)
-    question, papers = load(a.states)
-    papers = papers[:a.limit]
+    question, papers = load(a.states, s, a.out.with_suffix(".texts.json"))
+    papers = [p for p in papers if len(p.source_text) > 500][:a.limit]
+    if not papers:
+        raise SystemExit("no paper text could be fetched (network? NCBI_EMAIL?); nothing to extract")
+    print("text: " + ", ".join(f"{p.pmid}={p.text_access[:4]}/{len(p.source_text)}" for p in papers))
     llm = LangChainLLM(s, os.environ.get(f"{a.provider.upper()}_API_KEY"))
     rt = SimpleNamespace(settings=s, llm=llm, source=SimpleNamespace(fulltext=lambda p: p))
     model = s.models[a.provider]["reasoning"]
     print(f"{len(papers)} papers x {a.reps} reps x {a.efforts} = {len(papers) * a.reps * len(a.efforts)} extractions "
           f"on {model}; expect about ${0.025 * len(papers) * a.reps * len(a.efforts):.1f}")
-    arms = {e: [] for e in a.efforts}
+    arms, failed = {e: [] for e in a.efforts}, 0
     for rep in range(a.reps):
         for e in a.efforts:
             s.reasoning_effort["extract"] = e
@@ -96,7 +111,10 @@ def main(argv=None):
                 try:
                     kept, dropped = run_once(rt, p, question)
                 except Exception as ex:
-                    print(f"[{e} rep{rep} {p.pmid}] failed: {type(ex).__name__}")
+                    print(f"[{e} rep{rep} {p.pmid}] failed: {ex}")
+                    failed += 1
+                    if failed >= 4 and not any(arms.values()):
+                        raise SystemExit("4 extractions failed and none succeeded; stopping before more spend")
                     continue
                 d_in, d_out = llm.tokens_in["extract"] - i0, llm.tokens_out["extract"] - o0
                 arms[e].append({"pmid": p.pmid, "rep": rep, "claims": kept, "dropped": dropped, "out": d_out,
