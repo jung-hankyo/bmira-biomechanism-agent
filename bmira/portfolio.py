@@ -209,19 +209,21 @@ def proposal_keys(pathway, resolver, stop_at=frozenset()) -> tuple[list[str], di
 
 def as_chain(keys: list[str]) -> list[str]:
     """A proposal whose links share a source ('HIF -> Th17' and 'HIF -> Treg' after 'butyrate -> HIF') is a
-    fan, not a pathway: keep the shortest connected route from the first source to the last target
-    (pilot6's H7 was flagged 'steps do not connect' and failed on a side branch). Unchanged if none exists."""
+    fan, not a pathway: keep the connected route from the first source to the last target through the most
+    proposed steps, so a shortcut never replaces the mechanism (pilot6's H7 was flagged 'steps do not
+    connect' and failed on a side branch). Unchanged if no route exists."""
     if len(keys) < 2:
         return keys
     start, goal = split_key(keys[0])[0], split_key(keys[-1])[2]
-    best, queue = {start: []}, [start]
-    for node in queue:
+
+    def routes(node, path, seen):                 # proposals have a handful of links: exhaustive is fine
+        if node == goal and path:
+            yield path
         for k in keys:
             s, _, o = split_key(k)
-            if s == node and o not in best:
-                best[o] = best[node] + [k]
-                queue.append(o)
-    return best.get(goal) or keys
+            if s == node and o not in seen:
+                yield from routes(o, path + [k], seen | {o})
+    return max(routes(start, [], {start}), key=len, default=keys)
 
 
 def nodes(keys) -> list[str]:

@@ -186,7 +186,7 @@ IMPERATIVE = re.compile(r"^\W*(?:source-trace|trace|test|measure|compare|knock\s
 
 
 # '**[L4] FAO -> induced Tregs:**' names a link; it is a heading, not a statement ('induced' is no verb there)
-LINK_LABEL = re.compile(r"\*\*\s*\[[HL]\d+\][^*]*\*\*")
+LINK_LABEL = re.compile(r"\*\*\s*\[[HL]\d+\][^*]*:\*\*")      # a label ends with a colon; a bold claim does not
 
 
 def sentence_tier(sentence: str) -> int:

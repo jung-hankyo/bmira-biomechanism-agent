@@ -402,7 +402,7 @@ def test_effort_retries_and_cost():
         llm._for("screen", "cheap")
         assert seen[-1]["reasoning_effort"] == "low" and seen[-1]["max_retries"] == 6
         llm._for("extract", "reasoning")
-        assert seen[-1]["reasoning_effort"] == "low" and llm.model_of["extract"] == Settings().models["openai"]["reasoning"]
+        assert seen[-1]["reasoning_effort"] == "medium" and llm.model_of["extract"] == Settings().models["openai"]["reasoning"]
     finally:
         del sys.modules["langchain_openai"]
     assert estimate_cost("gpt-6-sol", 1_000_000, 100_000, Settings().prices) == 3.0
@@ -1186,6 +1186,7 @@ def test_citations_after_the_period_stay_with_their_sentence():
     assert out == []                       # 'induced' in a link label is no verb; 'reported increases' is a noun
     bad = verify_text("Butyrate increases FAO. [C1_0]", claims, [])["overclaims"]
     assert len(bad) == 1                   # a weak claim may still not say 'increases'
+    assert sentence_tier("**[H5] Butyrate drives Treg induction.**") == 4    # bold claim, not a label
 
 
 def test_activity_is_an_attribute_so_a_seeded_node_meets_the_claims():
@@ -1195,6 +1196,12 @@ def test_activity_is_an_attribute_so_a_seeded_node_meets_the_claims():
     assert entity_of("histone deacetylase activity") == ("histone deacetylase", "activity", "")
     assert entity_of("HDAC activity")[:2] == ("HDAC", "activity")
     assert entity_of("activity")[1] == "none" and entity_of("NF-kB signaling")[:2] == ("NF-kB", "activity")
+    for x in ("AMPK activity", "mTORC1 activity", "telomerase activity", "HDAC enzymatic activity", "NF-kB activity"):
+        assert entity_of(x)[1] == "activity", x
+    # a descriptive word before 'activity' names a phenotype, not a molecule: these stay whole
+    for x in ("physical activity", "disease activity", "NK cell cytotoxic activity", "phagocytic activity",
+              "suppressive activity"):
+        assert entity_of(x) == (x, "none", ""), x
 
 
 def test_a_fan_shaped_expansion_is_reduced_to_its_connected_chain():
@@ -1206,3 +1213,5 @@ def test_a_fan_shaped_expansion_is_reduced_to_its_connected_chain():
     assert pf.as_chain(chain) == chain
     assert pf.as_chain(["A|increases|M", "X|increases|Z"]) == ["A|increases|M", "X|increases|Z"]   # no route: unchanged
     assert pf.as_chain(["A|increases|Z"]) == ["A|increases|Z"]
+    # a shortcut must not replace the mechanism: keep the route through the most proposed steps
+    assert pf.as_chain(["A|increases|M", "A|increases|Z", "M|increases|Z"]) == ["A|increases|M", "M|increases|Z"]
