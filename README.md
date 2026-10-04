@@ -6,6 +6,8 @@ Ask *"Does X affect Y, and through which mechanisms?"*. B-MiRA searches PubMed, 
 
 > Research tool for exploring literature. Not medical advice, and not a substitute for reading the papers.
 
+> **Development branch:** fixes from live pilots 4–7 (v2.6, 83 tests: run replay, question probe, class exposures, out-of-scope questions, loss-of-function restatement, fewer verifier false alarms) are on [`pilot7-fixes`](https://github.com/jung-hankyo/bmira-biomechanism-agent/tree/pilot7-fixes) and not yet merged here.
+
 ---
 
 ## Why it is built this way
@@ -106,17 +108,12 @@ python -m bmira.experiments --offline              # wiring check, no keys
 
 Each session writes **one** file, `runs/session_<timestamp>.json` (git-ignored), rewritten after every question. Per run it holds: LLM calls, tokens, latency and failures per task; queries and hits; screening and full-text rates; claims kept and dropped (with reasons and samples); uncredited method details; ontology resolution and synonym merges; grades and caps; claim comparisons and conflicts; step and pathway verdicts with reasons; leader per round; verification; warnings; the log tail; the report. Per LLM task it also records the model used, reasoning tokens and an estimated cost (from the price table in `config.py`). The session header records models, effort settings, budget, preflight results and whether the code had uncommitted edits. A `signals` list flags measured values that crossed a heuristic threshold, each naming the code to inspect. The chat app offers the same summary as a download.
 
-### Using the notebook
-
-`B-MiRA_workflow.ipynb` runs the same pipeline step by step with inspection tables (pathways per round, step evidence, claim ledger) and is the easiest way to see *why* the agent reached its conclusion.
-
 ## Repository layout
 
 ```
 app.py                    Streamlit chat interface
 experiments/questions.txt Eight experiment questions for live runs
 docs/figure1.svg          Architecture figure (also .png)
-B-MiRA_workflow.ipynb     Walk-through notebook
 bmira/
   config.py               All tunable settings (one dataclass)
   schemas.py              Data models and controlled vocabularies
