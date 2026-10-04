@@ -1,8 +1,8 @@
 # B-MiRA — Biomedical Mechanism Inference Research Agent
 
-**v2.5** · LangGraph · Python 3.10+
+**v2.6** · LangGraph · Python 3.10+
 
-Ask *"Does X affect Y, and through which mechanisms?"*. B-MiRA searches PubMed, extracts claims from papers, grades the evidence, and weighs **several candidate pathways against each other** before writing a report in which every sentence is tied to a cited claim.
+Ask *"Does X affect Y, and through which mechanisms?"*, in any language and about a laboratory or a clinical question. B-MiRA searches PubMed, extracts claims from papers, grades the evidence, and weighs **several candidate pathways against each other** before writing a report in which every sentence is tied to a cited claim.
 
 > Research tool for exploring literature. Not medical advice, and not a substitute for reading the papers.
 
@@ -26,12 +26,16 @@ Ask *"Does X affect Y, and through which mechanisms?"*. B-MiRA searches PubMed, 
 
 **The evidence graph.** Every claim like *"lactate lowers NAD⁺ levels in CD8 T cells"* becomes an edge between two entities (*lactate → NAD⁺*). How the entity was measured (*levels*, *expression*, *differentiation*) and where (*colon*, *bone marrow*) are qualifiers on the claim, not part of the node: "induction of colonic regulatory T cells", "Treg differentiation" and "bone marrow Treg cells" all meet at *regulatory T cell*. Lists such as "NFAT1 and SMAD3" become one claim per entity; ontology terms prefer species-agnostic entries, then human, mouse, rat. Supporting, corroborating and opposing papers attach to the same edge, so a step's evidence is shared by every pathway that uses it.
 
+**The question.** The question is parsed into exposure, outcome, comparator, population and an expected direction, in English whatever language it was asked in. A decline or loss in the question (*"NAD⁺ decline"*, *"TET2 loss"*) is read as a decrease of the bare entity. A class exposure (*"SGLT2 inhibitors"*) is given its members (*empagliflozin, dapagliflozin*), which share the exposure node because papers name the members. A question the literature cannot answer as exposure → outcome (chit-chat, a personal treatment decision) stops before any search, and the reply says why.
+
 **The pathway portfolio.** Candidate pathways come from three places:
 1. **LLM proposals**: once, after the first search round, the model proposes a few pathways that must differ in their intermediate steps.
 2. **The literature graph**: code finds exposure → outcome routes that the evidence already connects, even if no one proposed them.
-3. **Gated expansion**: when a new intermediate appears in ≥ 2 papers, the model may add at most one pathway through it.
+3. **Gated expansion**: when a Supported step brings in an intermediate no pathway uses, the model may add at most one pathway through it, as one connected chain.
 
-**Scoring.** A pathway is only as strong as its weakest step. Biological logic checks (sign consistency, connectivity, cell-type coherence) lower the score of implausible pathways. Scores **rank** pathways; they are not probabilities.
+A one-step exposure → outcome route found in the literature answers *"does X affect Y"*; it is listed but takes no pathway slot, and there is one per outcome or readout. Proposed pathways stop at the first readout of the outcome.
+
+**Scoring.** A pathway is only as strong as its weakest step. Biological logic checks (sign consistency, connectivity, cell-type coherence) lower the score of implausible pathways. Routes whose weakest step has no evidence yet all score 0; they are ordered by how many of their steps are already supported. Scores **rank** pathways; they are not probabilities.
 
 ### Verdicts
 
@@ -53,12 +57,14 @@ Fixed rules, applied by code rather than by the model, decide what counts:
 |---|---|
 | A claim's quote must appear in the paper, name both entities, and agree with the claim's direction (a "no" or "did not" cannot be added or dropped) | Misread or invented findings |
 | Perturbation, rescue, validation and control details count only if the quote or a quoted methods sentence shows them | Inflated grades |
+| A finding in a knockout or deficiency (*"mice lacking GPR109A had fewer CD103⁺ DCs"*) is restated as the normal role of the lost entity (*GPR109A increases CD103⁺ DCs*), once, and only if the quote shows the loss | Pathway steps with the wrong sign |
 | Each claim is graded by its own experimental system (one paper can hold mouse and human data) | Paper-level mislabelling |
 | Evidence from a system further from the question's population (e.g. mouse for a human question) is capped at moderate | Over-reliance on indirect models |
 | Reviews are shown but never count as independent papers | Double-counting the same finding |
 | A null result counts against a step only if it had a control and is at least as strong as the support | Underpowered nulls erasing real effects |
 | An opposing finding is set aside as "different context" only if the recorded contexts really differ and it does not come from a system closer to humans | Explaining away contradictions |
 | Papers found for a step are read for that step before it can be called unfound | False "no study found" |
+| Report sentences are checked against the weakest claim they cite; statements of absence (*"a test of this step is missing [NO_EVIDENCE]"*) and proposed experiments are not read as findings | Overstated reports, and false alarms about them |
 
 ## Quick start
 
@@ -71,7 +77,7 @@ pip install -r requirements.txt
 **1. Try it offline (no keys, no network).** A synthetic scenario and a scripted model exercise the whole pipeline:
 
 ```bash
-python -m pytest -q tests          # 54 tests
+python -m pytest -q tests          # 83 tests
 streamlit run app.py               # choose "Offline demo" in the sidebar
 ```
 
@@ -88,6 +94,7 @@ export NCBI_API_KEY=...             # optional, raises PubMed rate limits
 | You type | B-MiRA does |
 |---|---|
 | A mechanism question | Runs a full investigation and shows the ranked pathways, the report and the run log |
+| A question outside its scope | Says why it was not investigated, without searching or spending |
 | A follow-up (*"why is route 2 contradicted?"*) | Answers **only** from that run's evidence, citing claim IDs; flags any sentence that overstates the evidence |
 | `/new <question>` | Starts a fresh investigation |
 
@@ -100,15 +107,16 @@ python -m bmira.experiments                        # the 8 questions in experime
 python -m bmira.experiments --only 1 2 --max-rounds 3
 python -m bmira.experiments --budget-tokens 2000000  # soft token cap per run
 python -m bmira.experiments --offline              # wiring check, no keys
+python -m bmira.experiments --replay runs/session_X_q1.state.json   # re-judge a saved run with the current code
+python -m bmira.probe                              # parse + round-1 queries + PubMed hit counts per question (~$0.03 each)
+python -m bmira.probe "Does exercise improve insulin sensitivity, and how?"
 ```
+
+**Before a costly run on a new question,** `bmira.probe` shows what the agent made of it: scope, exposure and outcome as resolved concepts, class members, readouts, expected direction, and each round-1 query with its hit count. A zero-hit query or an unresolved exposure seen here would otherwise cost a whole run. **A replay** re-runs normalization, comparison, the portfolio, the report and verification on a saved run's claims, so a fix to those stages can be checked without searching or reading again; each live run leaves a `<session>_q<n>.state.json` for this.
 
 **Before spending,** a preflight (a few seconds) sends one tiny call to each configured model with the same parameters as real calls, one PubMed search and one ontology lookup; a required failure aborts the session (`--no-preflight` skips it). **During a run,** rate limits, overloads and timeouts are retried with backoff; fatal errors (empty balance, invalid key, unknown model, unsupported parameter) stop the session at once instead of degrading silently. **A run that stops early is still summarized** from its last completed step, with `status`, `error` and `failed_node`, so paid work is never lost.
 
 Each session writes **one** file, `runs/session_<timestamp>.json` (git-ignored), rewritten after every question. Per run it holds: LLM calls, tokens, latency and failures per task; queries and hits; screening and full-text rates; claims kept and dropped (with reasons and samples); uncredited method details; ontology resolution and synonym merges; grades and caps; claim comparisons and conflicts; step and pathway verdicts with reasons; leader per round; verification; warnings; the log tail; the report. Per LLM task it also records the model used, reasoning tokens and an estimated cost (from the price table in `config.py`). The session header records models, effort settings, budget, preflight results and whether the code had uncommitted edits. A `signals` list flags measured values that crossed a heuristic threshold, each naming the code to inspect. The chat app offers the same summary as a download.
-
-### Using the notebook
-
-`B-MiRA_workflow.ipynb` runs the same pipeline step by step with inspection tables (pathways per round, step evidence, claim ledger) and is the easiest way to see *why* the agent reached its conclusion.
 
 ## Repository layout
 
@@ -116,7 +124,6 @@ Each session writes **one** file, `runs/session_<timestamp>.json` (git-ignored),
 app.py                    Streamlit chat interface
 experiments/questions.txt Eight experiment questions for live runs
 docs/figure1.svg          Architecture figure (also .png)
-B-MiRA_workflow.ipynb     Walk-through notebook
 bmira/
   config.py               All tunable settings (one dataclass)
   schemas.py              Data models and controlled vocabularies
@@ -129,7 +136,9 @@ bmira/
   graph.py                The LangGraph pipeline and report
   chat.py                 Follow-up answers grounded in a finished run
   telemetry.py            Run metrics and revision signals
-  experiments.py          Batch runner: questions in, one session summary file out
+  experiments.py          Batch runner: questions in, one session summary file out; --replay of saved runs
+  probe.py                Cheap check of how questions are parsed and searched, before a full run
+  ab_extract.py           A/B harness for extraction settings on stored papers
   offline.py              Scripted model + synthetic corpus for key-free runs
   fixtures/               Synthetic test scenario (invented papers)
 tests/test_bmira.py       One test per design guarantee
@@ -160,7 +169,9 @@ All in `bmira/config.py`; the app exposes the round limit.
 
 ## Limitations
 
-- **Live paths are not yet validated end to end.** The offline tests prove the pipeline's logic; they do not prove extraction accuracy on real papers. Validation against an expert-annotated gold set is the next milestone.
+- **Live runs so far cover one question.** Pilots 3–7 all asked question 1 (butyrate and colonic Tregs); the other seven, including the clinical ones, have not run end to end. The offline tests prove the pipeline's logic, not extraction accuracy on real papers. Validation against an expert-annotated gold set is the next milestone.
+- **Mechanism routes rarely reach Supported.** In every pilot the direct exposure → outcome routes were Supported and no multi-step route was: most mechanism steps rest on one paper (pilot7: 156 of 187 steps), and papers report *exposure → intermediate* far more often than *intermediate → outcome*. Read "Insufficient evidence" on a mechanism route as "not yet shown here", not as "wrong".
+- Two reads of the same paper at the same settings change about 40% of the extracted claims, so single-run comparisons show only large effects.
 - Grade weights and thresholds are reasoned defaults, not calibrated values.
 - The relation vocabulary (11 relations) cannot express dose, timing or compositional effects; those stay in the claim's context fields.
 - Only open-access full texts are read; everything else is abstract-only, which caps the evidence grade. Full texts are read section by section (Results, figure legends, Methods first).
@@ -182,6 +193,8 @@ All in `bmira/config.py`; the app exposes the round limit.
 **v2.4.0** fixes problems seen in the first live run. Graph nodes are entities, with measurement, process and tissue words kept as qualifiers. Lists are split into one claim per entity, and placeholders are rejected. Ontology choice is species-aware. The mention check accepts abbreviations the paper defines and the previous sentence. Targeted searches return fewer hits, judged against their step, with a relevance cut-off. Entity resolution is batched, parallel and cached across runs, and classification tasks run on the cheap model.
 
 **v2.5.0** fixes problems seen in the third live run (pilot3, butyrate and Tregs). Pair comparison now matches verdicts by position, so conflicts can be found (0 of 227 pairs were judged before). Entity names are looked up before they become local ids, Greek letters and charges keep entities apart, and genotype notation stays whole. Method and comparator wording is recognised more widely, including trial wording, and a randomized trial with a control arm can grade strong. A finding on a subtype supports the link to its parent, and a null finding can contradict a required-for step. A decline or loss in the question ("NAD+ decline", "TET2 loss") is read as a decrease of the bare entity and the expected pathway sign follows it. Verification no longer flags cell names such as "induced regulatory T cells" or negated statements as overclaims. Session files hide the NCBI key and email and list every claim and step. Papers read per round: 10 to 20.
+
+**v2.6.0** fixes problems seen in pilots 4–7 (butyrate and Tregs) and prepares for other questions. Each run saves its state and can be replayed with new code without searching again. Salts, acids and "given" wording name the parent chemical; ontology lookup rejects measurement, allele and strain-tagged terms; cell subtypes inherit the cell type they name; "X activity" after a gene symbol or enzyme is X with an activity attribute; identical labels merge without asking the model; a paper's own abbreviations are expanded when they resolve to nothing. Knockouts are written as *required for*, binding has no direction, inhibition is a decrease, and a finding in a knockout or deficiency is restated as the lost entity's normal role. The portfolio gives one direct route per outcome and no slot to it, stops proposals at the first readout, reduces fan-shaped proposals to one chain, weighs targets by progress and nearness to the exposure, and ranks unfinished routes by supported steps. Targets, conflict candidates and pairs are matched by number, not by echoed ids; one failed screening reply no longer costs the batch. The verifier keeps trailing citations with their sentence and no longer flags association wording, emphasis, link labels, denied claims, statements of absence or proposed experiments; the entailment judge sees each claim's system and design and skips proposals. The question parser answers in English, lists the members of a class exposure, gives clinical readouts, and stops out-of-scope questions before any search. New: `bmira.probe`, an A/B harness for extraction effort (extraction stays at medium: low read 18% fewer claims), and signals for a split exposure node and for Supported steps on no pathway. The walk-through notebook was removed.
 
 **v2.3.0** makes live runs safe to pay for: preflight checks, fatal-error abort, partial summaries for runs that stop early, per-task reasoning effort, a soft token budget, cost estimates, reasoning-token counts, and provenance of uncommitted edits. Log lines from parallel steps no longer merge.
 
