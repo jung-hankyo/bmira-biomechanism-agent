@@ -32,7 +32,7 @@ PROMPTS = {
         "If NO targets are given, return exactly 4 queries, one per intent: broad, mechanism, "
         "contradiction, negative_result.\n"
         "If targets are given, return exactly 3 queries PER target, intents gap_positive, "
-        "gap_alternative_terms, gap_null, and copy the target id into `target`. Do not re-run "
+        "gap_alternative_terms, gap_null, and set `target` to the target's number (T1, T2, ...). Do not re-run "
         "general coverage in targeted rounds."),
     "screen": (
         "Decide whether this paper can contribute evidence to the question (or to the listed "
@@ -227,8 +227,21 @@ class LangChainLLM:
     def structured_many(self, task, schema, system, users, role="cheap", ctxs=None):
         model = self._for(task, role).with_structured_output(schema, include_raw=True)
         res = self._run(task, len(users), lambda: model.batch(
-            [[("system", system), ("human", u)] for u in users], config={"max_concurrency": 8}))
-        return [self._parsed(task, r) for r in res]
+            [[("system", system), ("human", u)] for u in users], config={"max_concurrency": 8},
+            return_exceptions=True))
+        out = []
+        for r in res:            # one bad item costs that item (None), not the whole paid batch
+            if isinstance(r, Exception):
+                self.failures[task] += 1
+                if is_fatal(r):
+                    raise FatalLLMError(f"{task}: {type(r).__name__}: {r}") from r
+                out.append(None)
+                continue
+            try:
+                out.append(self._parsed(task, r))
+            except Exception:
+                out.append(None)
+        return out
 
     def text(self, task, system, user, role="reasoning", ctx=None):
         model = self._for(task, role)

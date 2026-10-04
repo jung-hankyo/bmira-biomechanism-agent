@@ -172,7 +172,7 @@ DENIED = re.compile(r"\b(?:is|are|was|were|has been|have been|remains?)\s+not\s+
                     r"(?:identified|established|shown|demonstrated|observed|found)\b")
 # 'the Treg increase itself', 'a decrease': the change word is a noun here
 # ponytail: also masks 'the data increase Tregs' (a plural verb after one word); rare, and a verb check needs a parser
-NOUN_CHANGE = re.compile(r"\b(?:the|an?|this|that|its|their|any)\s+(?:[\w-]+\s+)?(?:increase|decrease|reduction|elevation)\b")
+NOUN_CHANGE = re.compile(r"\b(?:the|an?|this|its|their|any)\s+(?:[\w-]+\s+)?(?:increase|decrease|reduction|elevation)\b")
 # what follows these is mentioned, not asserted: 'do not establish that X induces Y', 'would need to test'
 NOT_ASSERTED = re.compile(r"\b(?:do|does|did|can|could)\s*not\s+(?:establish|show|demonstrate|prove|support|"
                           r"confirm|indicate|imply|identify|reveal)\b|\bneeds? to\b|\bwhether\b")
@@ -180,7 +180,7 @@ NOT_ASSERTED = re.compile(r"\b(?:do|does|did|can|could)\s*not\s+(?:establish|sho
 
 # 'Source-trace microbial butyrate while measuring Treg induction, and test whether ...': a proposed
 # experiment, not a finding. Only at the start of the sentence.
-IMPERATIVE = re.compile(r"^\W*(?:source-trace|trace|test|measure|compare|knock\w*|block|delete|run|perform|treat|"
+IMPERATIVE = re.compile(r"^\W*(?:source-trace|trace|test|measure|compare|knock\s+(?:out|down)|block|delete|run|perform|treat|"
                         r"repeat|assess|determine|quantify|isolate|stratify|randomi[sz]e)\b")
 
 

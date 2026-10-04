@@ -121,9 +121,9 @@ def plan(state, rt):
     p = _as(ParsedQuestion, state["parsed"])
     user = f"Question: {state['question']}\nStructured: {p.model_dump_json()}\n"
     if targets:
-        user += "Targets:\n" + "\n".join(
-            f"[{t.key}] {t.subject_label} --{t.relation}--> {t.object_label} "
-            f"(papers={t.n_studies}, status={t.status})" for t in targets)
+        user += "Targets:\n" + "\n".join(      # numbered: models can't reliably echo ontology-id keys (K5, P4)
+            f"[T{n}] {t.subject_label} --{t.relation}--> {t.object_label} "
+            f"(papers={t.n_studies}, status={t.status})" for n, t in enumerate(targets, 1))
     out = rt.llm.structured("plan", QueryPlan, PROMPTS["plan"], user,
                             ctx={"parsed": p, "targets": targets})
     if not targets:                             # LLM output is a trust boundary: degrade, don't crash
@@ -135,8 +135,12 @@ def plan(state, rt):
         keys = {t.key for t in targets}
         norm = lambda k: k.strip().strip("[]`'\" ")             # the model copies ids with brackets or quotes
         by_key = {norm(k): k for k in keys}
-        queries = [q.model_copy(update={"target": by_key[norm(q.target)]}) for q in out.queries
-                   if norm(q.target) in by_key]
+
+        def target_of(q):                                        # 'T2', '2', '[T2]'; a scripted model echoes the key
+            m = re.fullmatch(r"\D*(\d{1,2})\D*", q.target.strip())
+            return by_key.get(norm(q.target)) or (targets[int(m[1]) - 1].key if m and 1 <= int(m[1]) <= len(targets)
+                                                  else None)
+        queries = [q.model_copy(update={"target": t}) for q in out.queries if (t := target_of(q))]
         if len(queries) < len(out.queries) or not queries:       # pilot5: 3 queries for 3 targets, no sign why
             print(f"[plan][WARN] {len(out.queries) - len(queries)} of {len(out.queries)} model queries named "
                   f"no known target and were dropped; targets {sorted(keys)}, model targets "
@@ -220,6 +224,8 @@ def screen(state, rt):
             print(f"[screen] batch failed ({type(e).__name__}); retrying next round")
             verdicts = []
         for p, r in zip(live, verdicts):
+            if r is None:                       # this paper's reply failed: stays unscreened, retried next round
+                continue
             keep = r.relevant and r.relevance_score >= rt.settings.min_relevance
             p.screen_status = "included" if keep else "excluded"
             p.relevance_score = r.relevance_score

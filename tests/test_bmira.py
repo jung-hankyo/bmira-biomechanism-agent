@@ -962,17 +962,19 @@ def test_plan_matches_target_ids_leniently_and_says_when_it_drops_queries(capsys
 
     class LLM:
         def __init__(self, targets):
-            self.targets = targets
+            self.targets, self.prompt = targets, ""
 
-        def structured(self, *a, **k):
+        def structured(self, task, schema, system, user, **k):
+            self.prompt = user
             return QueryPlan(queries=[SearchQuery(query=f"q{i}", intent="gap_positive", target=t)
                                       for i, t in enumerate(self.targets)])
     parsed = ParsedQuestion(population_model="m", exposure="a", comparator="c", outcome="b", mechanism_hypothesis="h")
     state = {"parsed": parsed, "question": "q", "links": {key: ln}, "targets": [key]}
-    rt.llm = LLM([f"[{key}]", f" {key} ", "nonsense"])
+    rt.llm = LLM(["T1", "[T1]", "1", f"[{key}]", "T2", "nonsense"])
     out = plan(state, rt)["queries"]
-    assert [q.target for q in out[:2]] == [key, key] and len(out) == 3          # 2 matched + 1 built by code
-    assert "[plan][WARN] 1 of 3 model queries named no known target" in capsys.readouterr().out
+    assert [q.target for q in out[:4]] == [key] * 4 and len(out) == 5           # 4 matched + 1 built by code
+    assert "[T1]" in rt.llm.prompt and key not in rt.llm.prompt                  # a number, nothing to echo
+    assert "[plan][WARN] 2 of 6 model queries named no known target" in capsys.readouterr().out
     rt.llm = LLM([key])
     plan(state, rt)
     assert "WARN" not in capsys.readouterr().out
@@ -1099,6 +1101,9 @@ def test_verifier_false_alarms_from_pilot5():
     assert sentence_tier("Source-trace microbial butyrate while measuring colonic Treg induction, and test "
                          "whether blocking FFAR2 changes it [NO_EVIDENCE].") == 0         # a proposed experiment
     assert sentence_tier("Testing shows butyrate induces Tregs.") == 4                   # 'Testing' is no imperative
+    assert sentence_tier("Knockout of Ffar2 abolished butyrate-induced Treg expansion [C1].") == 4   # a finding
+    assert sentence_tier("Knock out FFAR2 and measure Tregs.") == 0
+    assert sentence_tier("Fatty acids that increase FOXP3 are made by Clostridia [C2].") == 3  # 'that' + verb
 
 
 def test_direct_routes_take_no_pathway_slot():
@@ -1148,3 +1153,16 @@ def test_binding_has_no_direction_and_signed_effects_show_modulation():
     assert pf.build_links(claims, {}, {}, {}, Settings(), extra={mod})[mod].n_contra_studies == 1   # a null still refutes
     inc = pf.link_key("B", "increases", "D")
     assert pf.build_links(claims[1:2], {}, {}, {}, Settings(), extra={inc})[inc].n_studies == 0     # no loosening here
+
+
+def test_one_bad_screening_reply_does_not_discard_the_paid_batch():
+    from types import SimpleNamespace
+    from bmira.llm import LangChainLLM
+    from bmira.schemas import Screen
+    llm = LangChainLLM(Settings(), api_key="x")
+    ok = Screen(relevant=True, relevance_score=80, reason="r", study_type="animal")
+    batch = lambda msgs, config, return_exceptions: [{"parsed": ok, "raw": None}, ValueError("bad json"),
+                                                     {"parsed": None, "raw": None, "parsing_error": ValueError()}]
+    llm._for = lambda task, role: SimpleNamespace(with_structured_output=lambda *a, **k: SimpleNamespace(batch=batch))
+    assert llm.structured_many("screen", Screen, "s", ["a", "b", "c"]) == [ok, None, None]
+    assert llm.failures["screen"] == 2

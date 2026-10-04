@@ -54,7 +54,7 @@ class SearchQuery(BaseModel):
     query: str
     intent: Literal["broad", "mechanism", "contradiction", "negative_result",
                     "gap_positive", "gap_alternative_terms", "gap_null"]
-    target: str = Field("", description="Step id this query targets; empty in round 1")
+    target: str = Field("", description="Number of the target this query is for (T1, T2, ...); empty in round 1")
 
 
 class QueryPlan(BaseModel):
