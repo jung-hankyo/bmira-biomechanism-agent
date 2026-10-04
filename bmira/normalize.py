@@ -474,6 +474,9 @@ ATTRIBUTE_PATTERNS = [
      r"frequency|frequencies|numbers?|proportions?|percentages?|expansion|accumulation)\b", "amount"),
     (r"\bsignal+ing\b", "activity"),
     (r"\bphosphorylation\b", "modification"),
+    # 'histone deacetylase activity' must reach the node claims use for 'HDAC' (attribute activity);
+    # unsplit it resolved to a GO process and the seeded route never saw its own evidence (pilot6 H1)
+    (r"\b(?:enzymatic |catalytic )?activity\b", "activity"),
 ]
 GENERIC = {"cell", "cells", "tissue", "tissues", "gene", "protein", "level", "levels"}
 TISSUES = [

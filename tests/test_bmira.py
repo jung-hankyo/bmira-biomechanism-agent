@@ -1186,3 +1186,12 @@ def test_citations_after_the_period_stay_with_their_sentence():
     assert out == []                       # 'induced' in a link label is no verb; 'reported increases' is a noun
     bad = verify_text("Butyrate increases FAO. [C1_0]", claims, [])["overclaims"]
     assert len(bad) == 1                   # a weak claim may still not say 'increases'
+
+
+def test_activity_is_an_attribute_so_a_seeded_node_meets_the_claims():
+    """Pilot6: seed node 'histone deacetylase activity' resolved to a GO process while claims said 'HDAC'
+    (attribute activity) -> NCIT; butyrate->HDAC (2 papers) sat off the seeded route, which read 'not found yet'."""
+    from bmira.normalize import entity_of
+    assert entity_of("histone deacetylase activity") == ("histone deacetylase", "activity", "")
+    assert entity_of("HDAC activity")[:2] == ("HDAC", "activity")
+    assert entity_of("activity")[1] == "none" and entity_of("NF-kB signaling")[:2] == ("NF-kB", "activity")
