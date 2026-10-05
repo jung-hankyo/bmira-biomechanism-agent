@@ -97,11 +97,13 @@ def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, e
        to its ontology ancestor ('... increases Treg'), as support only: a null or opposite
        finding in a subtype never counts against the broader link, and the subject never rolls up
        ('butyrate' evidence is not evidence about 'short-chain fatty acids')."""
-    by_pair = defaultdict(list)
+    by_pair, persisted = defaultdict(list), defaultdict(list)
     by_id = {c.id: c for c in claims}
     for c in claims:
         if c.relation_norm not in {"", "unresolved"} and c.effect_result not in BLOCKING_ONLY:
             by_pair[(c.subject_concept, c.object_concept)].append(c)
+        elif c.effect_result == "unchanged":       # the effect persisted without M: evidence against 'M required_for Y'
+            persisted[(c.subject_concept, c.object_concept)].append(c)
     partners = defaultdict(set)
     for p, v in pair_cache.items():
         if v.same_finding:
@@ -143,7 +145,8 @@ def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, e
         if r in ASSOCIATIVE_RELATIONS and TIER[grade] > 1:
             grade = "weak"                      # an association caps the step, however powered
         contra = []
-        for c in (c for c in exact if _contradicts(r, c)):
+        opposing = exact + (persisted.get((s, o), []) if r == "required_for" else [])
+        for c in (c for c in opposing if _contradicts(r, c)):
             if c.study_type == "review":
                 uncounted[c.id] = "secondary source (review)"                       # R1
             elif any(frozenset((c.id, x.id)) in discounted and context_of(c) != context_of(x)

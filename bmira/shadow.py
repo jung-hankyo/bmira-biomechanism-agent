@@ -29,7 +29,7 @@ from bmira.judge import expected_level, level_probs, p_yes, top
 from bmira.normalize import _previous_sentence
 
 POLARITY_DROPS = {"quote negates the claimed effect", "null claim but the quote reports an effect"}
-BLOCKING_DROPS = {"blocking test without a perturbation", "blocking-test treatment not named in quote"}
+BLOCKING_DROPS = {"blocking test without a removal or blocking perturbation", "blocking-test treatment not named in quote"}
 LOSS_PERTURBATIONS = {"knockout", "knockdown", "pharmacological"}
 STEP = re.compile(r"^reports_step_(\d+)$")
 

@@ -26,7 +26,7 @@ from bmira.evidence import claim_study_type, verify_methods
 from bmira.normalize import (EntityResolver, _mentioned, _previous_sentence, abbreviations, check_claim,
                              consolidate_aliases, expand_abbreviations, entity_change, entity_of, entity_parts,
                              lexical_relation, lookup_key, split_change, with_mark)
-from bmira.schemas import (BLOCKING_RELATION, Claim, ClaimList, Conflict, DIRECTION, EntailmentBatch, Hypothesis,
+from bmira.schemas import (BLOCKING_PERTURBATIONS, BLOCKING_RELATION, Claim, ClaimList, Conflict, DIRECTION, EntailmentBatch, Hypothesis,
                            LinkEvidence, Paper, ParsedQuestion, PathwayProposal, QueryPlan,
                            RelationResolutionBatch, RewriteBatch, Screen, SearchQuery)
 from bmira.semantic import adjudicate, candidate_pairs, clusters, conflict_candidates, triage
@@ -295,29 +295,30 @@ def _check(c, paper, abbrevs, kept, dropped):
         dropped.append(c)
         return
     c.anchored, c.method_checks = True, warnings
-    perturbed = c.perturbation_class != "none"            # as extracted, before the cue check below
+    extracted = c.perturbation_class                      # as extracted, before the cue check below
     verify_methods(c, paper.source_text)
-    if reason := _blocking_check(c, paper, abbrevs, perturbed):
+    if reason := _blocking_check(c, paper, abbrevs, extracted):
         c.drop_reason = reason
         dropped.append(c)
         return
     kept.append(c)
 
 
-def _blocking_check(c, paper, abbrevs, perturbed: bool) -> str:
+def _blocking_check(c, paper, abbrevs, extracted: str) -> str:
     """EM-2: a blocking test needs a perturbation and its treatment named in the quote or the sentence
     before it; otherwise its meaning ('Gpr81-/- cells: lactate no longer reduced IFNG') cannot be stated as
     an ordinary edge either, so it is dropped with its reason. Half-filled fields are ignored.
-    `perturbed` is the extractor's perturbation: the cue check misses notations such as 'Slc5a8-null'
-    (pilot5), and that miss already lowers the grade; it must not also discard the experiment."""
+    `extracted` is the extractor's perturbation, which must remove or block the subject (knockout,
+    knockdown, inhibitor). It is read before the cue check, which misses notations such as 'Slc5a8-null'
+    (pilot5); that miss already lowers the grade and must not also discard the experiment."""
     if not (c.effect_exposure.strip() or c.effect_result):
         return ""
     if not (c.effect_exposure.strip() and c.effect_result):
         c.effect_exposure, c.effect_result = "", ""
         c.method_checks.append("incomplete blocking-test fields ignored")
         return ""
-    if not perturbed:
-        return "blocking test without a perturbation"
+    if extracted not in BLOCKING_PERTURBATIONS:          # overexpression or a diet removes nothing
+        return "blocking test without a removal or blocking perturbation"
     context = _previous_sentence(c.span, paper.source_text) + " " + c.span
     if not _mentioned(c.effect_exposure, context, abbrevs):
         return "blocking-test treatment not named in quote"

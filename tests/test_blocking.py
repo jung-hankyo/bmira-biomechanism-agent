@@ -57,7 +57,8 @@ def test_blocking_tests_keep_their_treatment_and_are_typed_from_the_result():
 
 @pytest.mark.parametrize("change, reason", [
     ({"effect_exposure": "propionate"}, "blocking-test treatment not named in quote"),
-    ({"perturbation_class": "none"}, "blocking test without a perturbation")])
+    ({"perturbation_class": "none"}, "blocking test without a removal or blocking perturbation"),
+    ({"perturbation_class": "overexpression"}, "blocking test without a removal or blocking perturbation")])
 def test_unverifiable_blocking_tests_are_dropped_with_a_reason(change, reason):
     kept, dropped = _extract({**SLC5A8, **change})
     assert not kept and dropped[0].drop_reason == reason
@@ -266,3 +267,16 @@ def test_states_saved_before_v3_still_replay(tmp_path):
     run = session["runs"][0]
     assert run["status"] == "completed" and run["verification"]["passed"]
     assert run["pathways"]["ranked"][0]["verdict"] == "Assembled from separate studies"   # no blocking test left
+
+
+def test_a_persisting_effect_still_counts_against_required_for():
+    """Review finding: an 'unchanged' blocking test left binary links entirely, so it could no longer refute
+    'M required_for Y' while 'abolished' ones still supported it. It counts against, never for (R5 applies)."""
+    sup = _block("a", "p1", "abolished")
+    sup.relation_norm = "required_for"
+    null = _block("n", "p2", "unchanged")
+    null.relation_norm = "no_effect"
+    key = pf.link_key("LOCAL:m", "required_for", "LOCAL:y")
+    ln = pf.build_links([sup, null], {}, {}, {}, Settings(), extra={key})[key]
+    assert ln.contradicting_ids == ["n"] and ln.status == "contradicted"
+    assert pf.link_key("LOCAL:m", "no_effect", "LOCAL:y") not in pf.build_links([null], {}, {}, {}, Settings())

@@ -21,6 +21,7 @@ DIRECTION = {"increases": "up", "decreases": "down"}
 BLOCKING_RELATION = {"abolished": "required_for", "attenuated": "required_for",
                      "unchanged": "no_effect", "enhanced": "modulates"}
 BLOCKING_ONLY = {"unchanged", "enhanced"}
+BLOCKING_PERTURBATIONS = {"knockout", "knockdown", "pharmacological"}    # what removes or blocks an entity
 
 CLAIM_TYPES = Literal["observation", "author_interpretation", "mechanistic_speculation"]
 PERTURBATIONS = Literal["none", "genetic_association", "pharmacological", "environmental",
