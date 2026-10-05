@@ -231,7 +231,11 @@ def load_scenario(name="lactate_cd8"):
 
 
 def offline_runtime(name="lactate_cd8", **overrides):
+    """Any judge_provider other than "off" gets the offline SurrogateJudge (no network)."""
     from bmira.graph import Runtime
+    from bmira.judge import SurrogateJudge
     scenario = load_scenario(name)
     settings = Settings(ontology_provider="llm", **overrides)   # OLS needs network
-    return Runtime(settings, SurrogateLLM(scenario), FixtureCorpus(scenario), HashingEmbedder()), scenario
+    judge = SurrogateJudge() if settings.judge_provider != "off" else None
+    return Runtime(settings, SurrogateLLM(scenario), FixtureCorpus(scenario), HashingEmbedder(),
+                   judge=judge), scenario

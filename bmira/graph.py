@@ -17,6 +17,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
 from bmira import portfolio as pf
+from bmira import shadow
 from bmira.config import Settings
 from bmira.evidence import grade_claim, is_proposal, prose_sentences, verify_text
 from bmira.llm import PROMPTS
@@ -41,16 +42,20 @@ class Runtime:
     pair_cache: dict = field(default_factory=dict)
     alias_verdicts: dict = field(default_factory=dict)
     conflict_cache: dict = field(default_factory=dict)
+    judge: object | None = None                   # decision model in shadow mode; None = off
 
     def __post_init__(self):
         self.resolver = self.resolver or EntityResolver(self.settings, self.llm)
 
     @classmethod
     def live(cls, settings: Settings, api_key: str | None = None):
+        from bmira.judge import make_judge
         from bmira.llm import LangChainLLM
         from bmira.semantic import SentenceEmbedder
         from bmira.sources import PubMedSource
-        return cls(settings, LangChainLLM(settings, api_key), PubMedSource(settings), SentenceEmbedder())
+        llm = LangChainLLM(settings, api_key)
+        judge = make_judge(settings)
+        return cls(settings, llm, PubMedSource(settings), SentenceEmbedder(), judge=judge)
 
 
 # ── state ───────────────────────────────────────────────────────────────────
@@ -94,6 +99,7 @@ class State(TypedDict, total=False):
     seed_status: str
     round_idx: int
     portfolio_history: Annotated[list, operator.add]
+    judge_log: Annotated[list, operator.add]       # shadow judgments beside today's decisions
     synthesis: str
     link_tags: dict
     warnings: list
@@ -244,7 +250,10 @@ def screen(state, rt):
     todo = [p for p in todo if p.screen_status != "unscreened"]
     print(f"[screen] {len(todo)} screened, {sum(p.screen_status == 'included' for p in todo)} "
           f"included, {sum(p.retracted for p in todo)} retracted excluded")
-    return {"papers": todo}
+    log = shadow.screen(rt, [p for p in todo if not p.retracted], _as(ParsedQuestion, state["parsed"]), {
+        p.pmid: [(k, f"{links[k].subject_label} --{links[k].relation}--> {links[k].object_label}")
+                 for k in p.retrieved_for if k in links] for p in todo})
+    return {"papers": todo, "judge_log": log}
 
 
 def fan_out(state, rt):
@@ -296,7 +305,7 @@ def extract(payload, rt):
     except Exception as e:
         print(f"[extract] PMID {paper.pmid} failed ({type(e).__name__}); retried next round")
         return {}
-    kept, dropped, n = [], [], payload["n_existing"]
+    kept, dropped, n, records = [], [], payload["n_existing"], []
     abbrevs = abbreviations(paper.source_text)
     for ec in out.claims[:s.max_claims_per_paper]:
         subjects, s_tissue = entity_parts(ec.subject)        # 'NFAT1 and SMAD3' -> one claim each
@@ -313,14 +322,17 @@ def extract(payload, rt):
                           study_type=claim_study_type(paper.study_type, paper.pubtype_study_type, ec.system),
                           text_access=paper.text_access, relation_raw=ec.relation)
                 n += 1
+                before = c.model_copy()
                 _check(c, paper, abbrevs, kept, dropped)
+                records.append((before, c))
     reads = sorted(set(paper.read_for) | set(payload["focus_keys"]))
     print(f"[extract] {paper.pmid}: {len(kept)} kept, {len(dropped)} dropped"
           + (f" ({', '.join(c.drop_reason for c in dropped)})" if dropped else "")
           + (f"; read for {len(payload['focus_keys'])} step(s)" if payload["focus_keys"] else ""))
     return {"claims": kept, "dropped_claims": dropped, "extracted_pmids": [paper.pmid],
             "papers": [paper.model_copy(update={"read_for": reads, "n_reads": paper.n_reads + 1,
-                                                "chars_read": paper.chars_read + len(text)})]}
+                                                "chars_read": paper.chars_read + len(text)})],
+            "judge_log": shadow.claims(rt, paper, records)}
 
 
 def _surfaces(c) -> tuple[str, str]:
@@ -380,6 +392,7 @@ def normalize(state, rt):
                     c.relation_confidence = r.confidence
         except Exception as e:
             print(f"[relation] batch failed ({type(e).__name__}); claims stay pending for retry")
+    log = shadow.relations(rt, [(c, c.relation_norm, c.relation_source) for c in fresh])   # as worded, before restatement
     for c in fresh:      # 'Tet2 loss increases IL-6' and 'Gpr109a-/- mice show fewer DCs' are 'Tet2 decreases IL-6'
         lost = c.subject_lost or entity_change(c.subject) == "down"      # for the bare entity; one flip, not two
         if c.relation_norm in DIRECTION and lost != (entity_change(c.object) == "down"):
@@ -401,7 +414,7 @@ def normalize(state, rt):
     rt.resolver.save()
     print(f"[normalize] {len(claims)} claims, {len(pending)} relations sent to LLM, "
           f"{merged} alias merges")
-    return {"claims": claims}
+    return {"claims": claims, "judge_log": log}
 
 
 def semantic(state, rt):
@@ -681,6 +694,16 @@ def _entailment(text, claims, rt):
             for j in out.judgements if j.verdict != "entailed" and j.sentence_index < len(sents)]
 
 
+def _entailment_verdicts(text, claims, issues) -> dict:
+    """sentence -> today's entailment verdict, for every sentence the check judged ('entailed' unless flagged)."""
+    if any(e["verdict"] == "check_unavailable" for e in issues):
+        return {}
+    ids = {c.id for c in claims}
+    judged = {s: "entailed" for s in prose_sentences(text)
+              if any(x in ids for x in re.findall(r"\[([A-Za-z0-9_\-]+)\]", s)) and not is_proposal(s)}
+    return {**judged, **{e["sentence"]: e["verdict"] for e in issues if e.get("sentence") in judged}}
+
+
 def _step_label(ln) -> str:
     label = pf.STATUS_LABEL[ln.status]
     return label if ln.status == "contradicted" or not ln.support_ids else f"{label}, {ln.grade}"
@@ -693,6 +716,8 @@ def verify(state, rt):
     tags = state["link_tags"]
     v = verify_text(state["synthesis"], claims, [h.id for h in hyps] + list(tags.values()))
     v["entailment"] = _entailment(state["synthesis"], claims, rt)
+    log = shadow.report(rt, state["synthesis"], claims, {o["sentence"] for o in v["overclaims"]},
+                        _entailment_verdicts(state["synthesis"], claims, v["entailment"]))
     v["passed"] = v["passed"] and not any(e["verdict"] == "unsupported" for e in v["entailment"])
     table = ["| Pathway | Verdict | Why | Score | Source | Logic warnings | Steps |",
              "|---|---|---|---|---|---|---|"]
@@ -718,7 +743,7 @@ def verify(state, rt):
     print(f"[verify] {'PASS' if v['passed'] else 'VIOLATIONS'}: uncited={len(v['uncited'])} "
           f"overclaims={len(v['overclaims'])} missing_tags={len(v['missing_tags'])} "
           f"entailment_issues={len(v['entailment'])}")
-    return {"verification": v, "report": report}
+    return {"verification": v, "report": report, "judge_log": log}
 
 
 # ── assembly ────────────────────────────────────────────────────────────────

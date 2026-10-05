@@ -100,6 +100,11 @@ def execute(question: str, rt, on_progress=None, echo: bool = True, resume: dict
             print(f"[run] {info['status'].upper()} at step {info['failed_node']}: {info['error'][:300]}")
     info.update(wall_seconds=round(time.perf_counter() - t0, 1), log=log.lines,
                 node_seconds={k: round(v, 1) for k, v in node_seconds.most_common()})
+    if getattr(rt, "judge", None) is not None:
+        try:
+            rt.judge.save()                        # replays at the same judge version are then free
+        except OSError as e:
+            print(f"[judge][WARN] cache not saved ({e})")
     return agent.get_state(cfg).values, info
 
 
@@ -234,6 +239,8 @@ def summarize(final: dict, rt, run: dict) -> dict:
                        "seconds": round(getattr(llm, "seconds", zero)[t], 1),
                        "est_cost_usd": estimate_cost(model, t_in, t_out, s.prices)}
     costs = [v["est_cost_usd"] for v in per_task.values()]
+    judge = judge_summary(rt, final.get("judge_log", []))
+    llm_cost = round(sum(c for c in costs if c is not None), 4) if any(c is not None for c in costs) else None
     summary = {
         "status": run.get("status", "completed"), "error": run.get("error"), "failed_node": run.get("failed_node"),
         "run": {
@@ -254,9 +261,12 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "total_tokens_out": sum(v["tokens_out"] for v in per_task.values()),
             "total_tokens_reasoning": sum(v["tokens_reasoning"] for v in per_task.values()),
             "total_failures": sum(v["failures"] for v in per_task.values()),
-            "est_cost_usd": round(sum(c for c in costs if c is not None), 4) if any(c is not None for c in costs) else None,
+            "est_cost_usd": llm_cost,
             "cost_complete": all(c is not None for c in costs),
             "budget_tokens": s.budget_tokens},
+        "judge": judge,
+        "est_cost_usd_total": round((llm_cost or 0) + (judge.get("est_cost_usd") or 0), 4)
+        if llm_cost is not None or judge.get("est_cost_usd") else None,
         "retrieval": {
             "queries": len(qlog), "queries_failed": sum(not q["ok"] for q in qlog),
             "queries_zero_hits": sum(q["ok"] and q.get("hits", 0) == 0 for q in qlog),
@@ -372,6 +382,23 @@ def summarize(final: dict, rt, run: dict) -> dict:
     return summary
 
 
+def judge_summary(rt, log: list) -> dict:
+    """Decision-model calls, tokens, cost and failures per task, plus agreement with today's executor."""
+    from bmira.shadow import agreement
+    j, s = getattr(rt, "judge", None), rt.settings
+    if j is None:
+        return {"provider": "off"}
+    zero = Counter()
+    per_task = {t: {"calls": j.calls[t], "items": j.items[t], "cache_hits": j.cache_hits[t], "failures": j.failures[t],
+                    "tokens_in": j.tokens_in[t], "seconds": round(j.seconds[t], 1),
+                    "est_cost_usd": estimate_cost(j.model, j.tokens_in[t], 0, s.prices)}
+                for t in sorted(set(j.calls) | set(j.cache_hits) | set(getattr(j, "failures", zero)))}
+    costs = [v["est_cost_usd"] for v in per_task.values() if v["est_cost_usd"] is not None]
+    return {"provider": s.judge_provider, "model": j.model, "mode": s.judge_mode, "disabled": j.disabled or None,
+            "per_task": per_task, "est_cost_usd": round(sum(costs), 6) if costs else None,
+            "judgments": len(log), "agreement": agreement(log)}
+
+
 # ── preflight ───────────────────────────────────────────────────────────────
 class Ping(BaseModel):
     ok: bool
@@ -397,6 +424,10 @@ def preflight(rt) -> list[dict]:
         check(f"LLM {role} model ({model})", lambda r=role: rt.llm.structured(
             "preflight", Ping, "Answer with ok = true.", "ping", role=r, ctx={"schema": Ping}).ok)
     check("PubMed search", lambda: f"{len(rt.source.search('butyrate regulatory T cells', 1)['pmids'])} hit(s)")
+    if getattr(rt, "judge", None) is not None:      # shadow only: a failure never blocks a run
+        check(f"Judge ({rt.judge.model}, shadow)", lambda: rt.judge.ask(
+            "preflight", {"word": "ping"}, {"ok": {"type": "noul", "instructions": "Is `word` the word ping?"}},
+            ctx={"current": {"ok": True}})["ok"], required=False)
     if rt.settings.ontology_provider in {"ols", "hybrid"}:
         def ols():
             hit = rt.resolver._ols("regulatory T cell")     # returns None on network errors too

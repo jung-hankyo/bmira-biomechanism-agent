@@ -70,4 +70,15 @@ class Settings:
     # official changelog; Anthropic figures: published list prices (both checked 2026-10-03).
     prices: dict = field(default_factory=lambda: {
         "gpt-6-sol": (2.0, 10.0), "gpt-6.1-sol": (2.0, 10.0), "gpt-6-luna": (0.10, 0.50),
-        "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-4-5-20251001": (1.0, 5.0)})
+        "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-4-5-20251001": (1.0, 5.0),
+        "jev-1.13.0": (0.042, 0.0)})                 # judge: input only, output free (TypeSafe, 2026-10-05)
+    # Decision model ("judge", TypeSafe Jev) for typed judgments; questions and thresholds in
+    # bmira/questions.py. "off" keeps today's executors everywhere. Shadow mode asks and logs next
+    # to today's decision (state judge_log, telemetry 'judge') and changes nothing; "act" is
+    # refused until a touchpoint is calibrated on gold labels. Needs TYPESAFE_API_KEY.
+    judge_provider: str = "off"                  # "jev" | "off"
+    judge_model: str = "jev-1.13.0"              # pinned; never an alias such as jev-latest
+    judge_mode: str = "shadow"
+    judge_timeout_s: float = 30.0
+    judge_workers: int = 16
+    judge_max_retries: int = 6
