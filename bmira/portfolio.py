@@ -9,7 +9,7 @@ from collections import defaultdict
 
 from bmira.evidence import SYSTEM_RANK, stance
 from bmira.normalize import entity_change, entity_of
-from bmira.schemas import (ASSOCIATIVE_RELATIONS, DIRECTION, NULL_RELATIONS, RELATION_SET,
+from bmira.schemas import (ASSOCIATIVE_RELATIONS, BLOCKING_ONLY, DIRECTION, NULL_RELATIONS, RELATION_SET,
                            SYSTEM_GROUP, TIER, Hypothesis, LinkEvidence)
 
 QUALITY = {"ungraded": 0.0, "weak": 0.4, "moderate": 0.7, "strong": 1.0}
@@ -93,7 +93,7 @@ def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, e
     by_pair = defaultdict(list)
     by_id = {c.id: c for c in claims}
     for c in claims:
-        if c.relation_norm not in {"", "unresolved"}:
+        if c.relation_norm not in {"", "unresolved"} and c.effect_result not in BLOCKING_ONLY:
             by_pair[(c.subject_concept, c.object_concept)].append(c)
     partners = defaultdict(set)
     for p, v in pair_cache.items():

@@ -16,6 +16,11 @@ ASSOCIATIVE_RELATIONS = {"associated_with", "not_associated", "predicts"}
 NULL_RELATIONS = {"no_effect", "not_associated"}
 PHYSICAL_RELATIONS = {"binds", "modifies"}
 DIRECTION = {"increases": "up", "decreases": "down"}
+# A blocking test's binary-link meaning (EM-1): the effect needed M, so M is required for Y. A blocking test
+# that left the effect unchanged or larger says nothing as an M -> Y edge; it lives in the mediation index only.
+BLOCKING_RELATION = {"abolished": "required_for", "attenuated": "required_for",
+                     "unchanged": "no_effect", "enhanced": "modulates"}
+BLOCKING_ONLY = {"unchanged", "enhanced"}
 
 CLAIM_TYPES = Literal["observation", "author_interpretation", "mechanistic_speculation"]
 PERTURBATIONS = Literal["none", "genetic_association", "pharmacological", "environmental",
@@ -113,6 +118,11 @@ class ExtractedClaim(BaseModel):
         "True when the subject is knocked out or down, deleted, depleted, inhibited or absent in this "
         "experiment ('Gpr109a-/- mice', 'X-deficient cells', 'mice lacking X') and the relation states "
         "what that LOSS did"))
+    effect_exposure: str = Field("", description=(
+        "Only for a blocking test: the treatment whose effect was measured with the subject removed or "
+        "blocked ('lactate' in 'lactate no longer reduced IFNG in Gpr81-/- T cells'). Empty otherwise"))
+    effect_result: Literal["", "abolished", "attenuated", "unchanged", "enhanced"] = Field("", description=(
+        "Only for a blocking test: what happened to the treatment's effect without the subject. Empty otherwise"))
     rescue_arm: bool = False
     orthogonal_validation: bool = False
     comparator_present: bool = False
@@ -142,6 +152,8 @@ class Claim(ExtractedClaim):
     subject_parents: list[str] = Field(default_factory=list)
     object_parents: list[str] = Field(default_factory=list)
     context_concept: str = ""
+    effect_exposure_concept: str = ""                # blocking tests: the treatment X, resolved
+    effect_exposure_label: str = ""
     round: int = 0
     method_checks: list[str] = Field(default_factory=list)   # method fields reset for lack of evidence
     drop_reason: str = ""
@@ -155,6 +167,11 @@ class Claim(ExtractedClaim):
     @property
     def context(self) -> str:
         return (self.context_cell_type or "unspecified").strip().lower()
+
+    @property
+    def is_blocking_test(self) -> bool:
+        """M removed or blocked, and what happened to X's effect on Y recorded (EM-1)."""
+        return bool(self.effect_exposure and self.effect_result)
 
 
 class RelationResolution(BaseModel):

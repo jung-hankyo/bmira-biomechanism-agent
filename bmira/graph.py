@@ -22,11 +22,11 @@ from bmira.config import Settings
 from bmira.evidence import grade_claim, is_proposal, prose_sentences, verify_text
 from bmira.llm import PROMPTS
 from bmira.evidence import claim_study_type, verify_methods
-from bmira.normalize import (EntityResolver, abbreviations, check_claim, consolidate_aliases, expand_abbreviations,
-                             entity_change, entity_of, entity_parts, lexical_relation, lookup_key,
-                             split_change, with_mark)
-from bmira.schemas import (Claim, ClaimList, Conflict, DIRECTION, EntailmentBatch, Hypothesis, LinkEvidence,
-                           Paper, ParsedQuestion, PathwayProposal, QueryPlan,
+from bmira.normalize import (EntityResolver, _mentioned, _previous_sentence, abbreviations, check_claim,
+                             consolidate_aliases, expand_abbreviations, entity_change, entity_of, entity_parts,
+                             lexical_relation, lookup_key, split_change, with_mark)
+from bmira.schemas import (BLOCKING_RELATION, Claim, ClaimList, Conflict, DIRECTION, EntailmentBatch, Hypothesis,
+                           LinkEvidence, Paper, ParsedQuestion, PathwayProposal, QueryPlan,
                            RelationResolutionBatch, Screen, SearchQuery)
 from bmira.semantic import adjudicate, candidate_pairs, clusters, conflict_candidates, triage
 
@@ -287,7 +287,36 @@ def _check(c, paper, abbrevs, kept, dropped):
         dropped.append(c)
         return
     c.anchored, c.method_checks = True, warnings
-    kept.append(verify_methods(c, paper.source_text))
+    perturbed = c.perturbation_class != "none"            # as extracted, before the cue check below
+    verify_methods(c, paper.source_text)
+    if reason := _blocking_check(c, paper, abbrevs, perturbed):
+        c.drop_reason = reason
+        dropped.append(c)
+        return
+    kept.append(c)
+
+
+def _blocking_check(c, paper, abbrevs, perturbed: bool) -> str:
+    """EM-2: a blocking test needs a perturbation and its treatment named in the quote or the sentence
+    before it; otherwise its meaning ('Gpr81-/- cells: lactate no longer reduced IFNG') cannot be stated as
+    an ordinary edge either, so it is dropped with its reason. Half-filled fields are ignored.
+    `perturbed` is the extractor's perturbation: the cue check misses notations such as 'Slc5a8-null'
+    (pilot5), and that miss already lowers the grade; it must not also discard the experiment."""
+    if not (c.effect_exposure.strip() or c.effect_result):
+        return ""
+    if not (c.effect_exposure.strip() and c.effect_result):
+        c.effect_exposure, c.effect_result = "", ""
+        c.method_checks.append("incomplete blocking-test fields ignored")
+        return ""
+    if not perturbed:
+        return "blocking test without a perturbation"
+    context = _previous_sentence(c.span, paper.source_text) + " " + c.span
+    if not _mentioned(c.effect_exposure, context, abbrevs):
+        return "blocking-test treatment not named in quote"
+    if c.subject_lost:                          # the result already says what the loss did: never flip it
+        c.subject_lost = False
+        c.method_checks.append("subject_lost ignored on a blocking test")
+    return ""
 
 
 def extract(payload, rt):
@@ -368,13 +397,18 @@ def _set_concepts(c, rt, forms=None):
     c.object_concept, c.object_label, c.object_category = o.id, o.label, o.category
     c.subject_parents, c.object_parents = list(s.parents), list(o.parents)
     c.context_concept = rt.resolver.resolve(c.context_cell_type).id if c.context_cell_type else ""
+    if c.is_blocking_test:
+        x = rt.resolver.resolve(entity_of(pick(c.effect_exposure))[0])
+        c.effect_exposure_concept, c.effect_exposure_label = x.id, x.label
 
 
 def normalize(state, rt):
     claims = [_as(Claim, c) for c in state.get("claims", [])]
     fresh = [c for c in claims if not c.relation_norm]        # typed this round: restate loss claims once
     for c in claims:
-        if not c.relation_norm:
+        if not c.relation_norm and c.is_blocking_test:        # EM-1: the result, not the wording, types it
+            c.relation_norm, c.relation_source = BLOCKING_RELATION[c.effect_result], "blocking_test"
+        elif not c.relation_norm:
             c.relation_norm, c.relation_source = lexical_relation(c.relation_raw), "lexical"
     pending = [c for c in claims if not c.relation_norm]      # only never-resolved claims
     for i in range(0, len(pending), 20):
@@ -395,13 +429,16 @@ def normalize(state, rt):
     log = shadow.relations(rt, [(c, c.relation_norm, c.relation_source) for c in fresh])   # as worded, before restatement
     for c in fresh:      # 'Tet2 loss increases IL-6' and 'Gpr109a-/- mice show fewer DCs' are 'Tet2 decreases IL-6'
         lost = c.subject_lost or entity_change(c.subject) == "down"      # for the bare entity; one flip, not two
+        if c.is_blocking_test:                                           # typed from its result: never restated
+            continue
         if c.relation_norm in DIRECTION and lost != (entity_change(c.object) == "down"):
             c.relation_norm = "decreases" if c.relation_norm == "increases" else "increases"
     forms = _long_forms(state)
     rt.resolver.resolve_many([entity_of(e)[0] for c in claims for e in _surfaces(c)]
                              + [entity_of(lf)[0] for c in claims for e in _surfaces(c)
                                 if (lf := _long(e, forms.get(c.pmid, {})))]
-                             + [c.context_cell_type for c in claims if c.context_cell_type])
+                             + [c.context_cell_type for c in claims if c.context_cell_type]
+                             + [entity_of(c.effect_exposure)[0] for c in claims if c.is_blocking_test])
     for c in claims:
         _set_concepts(c, rt, forms.get(c.pmid))
     nodes = [n for h in state.get("hypotheses", []) for k in _as(Hypothesis, h).links

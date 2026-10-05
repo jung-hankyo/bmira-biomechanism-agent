@@ -51,7 +51,9 @@ def census(path: Path) -> dict:
                           "endpoint": c.get("object_label") or c["object"], "relation": c.get("relation_norm"),
                           "subject_lost": bool(c.get("subject_lost")), "perturbation": c["perturbation_class"],
                           "exposure_named": named, "grade": c.get("grade"), "span": c["span"][:240]})
+    explicit = [c for c in st.get("claims", []) if c.get("effect_exposure") and c.get("effect_result")]
     return {"state": str(path), "claims": len(st.get("claims", [])),
+            "explicit_blocking_tests": len(explicit),           # recorded as such by EM-1 extraction
             "required_for": sum(c.get("relation_norm") == "required_for" for c in st.get("claims", [])),
             "subject_lost": sum(bool(c.get("subject_lost")) for c in st.get("claims", [])),
             "perturbed_candidates": candidates, "blocking_tests": len(found),
@@ -68,11 +70,11 @@ def main(argv=None):
     if a.json:
         print(json.dumps(rows, indent=1, ensure_ascii=False))
         return rows
-    print("| State | Claims | required_for | subject_lost | Perturbed candidates | Blocking tests | Papers |")
-    print("|---|---|---|---|---|---|---|")
+    print("| State | Claims | required_for | subject_lost | Perturbed candidates | Blocking tests | Papers | Explicit (EM-1) |")
+    print("|---|---|---|---|---|---|---|---|")
     for r in rows:
         print(f"| {Path(r['state']).name} | {r['claims']} | {r['required_for']} | {r['subject_lost']} | "
-              f"{r['perturbed_candidates']} | {r['blocking_tests']} | {r['papers']} |")
+              f"{r['perturbed_candidates']} | {r['blocking_tests']} | {r['papers']} | {r['explicit_blocking_tests']} |")
     if a.list:
         for r in rows:
             for x in r["list"]:

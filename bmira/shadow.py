@@ -29,6 +29,7 @@ from bmira.judge import expected_level, level_probs, p_yes, top
 from bmira.normalize import _previous_sentence
 
 POLARITY_DROPS = {"quote negates the claimed effect", "null claim but the quote reports an effect"}
+BLOCKING_DROPS = {"blocking test without a perturbation", "blocking-test treatment not named in quote"}
 LOSS_PERTURBATIONS = {"knockout", "knockdown", "pharmacological"}
 STEP = re.compile(r"^reports_step_(\d+)$")
 
@@ -105,12 +106,15 @@ def claims(rt, paper, records) -> list:
     Kept claims get stance, method fields and subject_lost; claims dropped for polarity get stance."""
     items, meta = [], []
     for before, after in records:
-        if after.drop_reason and after.drop_reason not in POLARITY_DROPS:
+        if after.drop_reason and after.drop_reason not in POLARITY_DROPS | BLOCKING_DROPS:
             continue                                  # quote not found / entity not named: no stance to judge
         prev = _previous_sentence(before.span, paper.source_text or paper.abstract)
         state = {"claim": f"{before.subject} | {before.relation} | {before.object}", "subject": before.subject,
-                 "quote": before.span, "previous_sentence": prev, "methods": before.methods_span}
-        if after.drop_reason:
+                 "object": before.object, "quote": before.span, "previous_sentence": prev,
+                 "methods": before.methods_span, "effect_exposure": before.effect_exposure}
+        if after.drop_reason in BLOCKING_DROPS:      # JV-15: the code check rejected it as a blocking test
+            qs, cur = {"blocking_test": Q.BLOCKING["blocking_test"]}, {"blocking_test": False}
+        elif after.drop_reason:
             qs, cur = Q.STANCE, {"stance": "contradicts"}
         else:
             qs = dict(CLAIM_QUESTIONS)
@@ -119,6 +123,9 @@ def claims(rt, paper, records) -> list:
             cur = {"stance": "supports", "comparator": after.comparator_present,
                    "perturbation": after.perturbation_class, "rescue": after.rescue_arm,
                    "orthogonal": after.orthogonal_validation, "subject_lost": after.subject_lost}
+            if after.is_blocking_test:                # JV-15
+                qs.update(Q.BLOCKING)
+                cur.update(blocking_test=True, effect_result=after.effect_result)
         items.append((state, qs, {"current": cur}))
         meta.append((before, after, cur))
     out = []
@@ -126,6 +133,12 @@ def claims(rt, paper, records) -> list:
         if a is None:
             continue
         cid = after.id
+        if (pb := p_yes(a.get("blocking_test"))) is not None:
+            out.append(entry("blocking_test", cid, cur.get("blocking_test"), pb >= 0.5, pb, drop_reason=after.drop_reason))
+        choice, conf, probs = top(a.get("effect_result"))
+        if choice:
+            out.append(entry("blocking.effect_result", cid, cur.get("effect_result"), choice, probs.get(choice, conf),
+                             probabilities=probs))
         choice, conf, probs = top(a.get("stance"))
         if choice:
             out.append(entry("stance", cid, cur["stance"], choice, probs.get(choice, conf),
