@@ -92,6 +92,7 @@ class State(TypedDict, total=False):
     conflict_candidates: int
     conflict_status: str
     links: dict
+    mediation: dict                                # blocking tests by exposure|mediator|outcome (EM-3)
     hypotheses: list
     targets: list
     gate: str
@@ -603,7 +604,9 @@ def portfolio(state, rt):
                            {k for h in hyps for k in h.links}, discounted, ancestors)
 
     cats = {cid: c.category for cid, c in r.concepts.items()}
-    hyps = pf.evaluate(hyps, links, cats, pf.pathway_sign(p.expected_direction, p.exposure_change), s)
+    mediation = pf.build_mediation(claims, exposure, named, ancestors, labels, s, canon=lambda x: _canon(x, rt))
+    hyps = pf.evaluate(hyps, links, cats, pf.pathway_sign(p.expected_direction, p.exposure_change), s,
+                       mediation, ancestors)
     rnd = this_round
     targets = pf.allocate(hyps, links, s, rnd)
     decision, gate = pf.decide(hyps, targets, rnd, s)
@@ -614,13 +617,13 @@ def portfolio(state, rt):
         for k in targets:
             links[k].times_targeted -= 1
         targets = []
-    print(f"[portfolio] round {rnd}: " + ", ".join(f"{h.id}={pf.STATUS_LABEL[h.status]}:{h.score}"
+    print(f"[portfolio] round {rnd}: " + ", ".join(f"{h.id}={pf.ROUTE_LABEL[h.status]}:{h.score}"
                                                     for h in hyps)
           + f" | {pf.STOP_LABEL[gate]} | targets={[f'{links[k].subject_label}->{links[k].object_label}' for k in targets]}")
-    return {"links": links, "hypotheses": hyps, "targets": targets, "decision": decision,
+    return {"links": links, "mediation": mediation, "hypotheses": hyps, "targets": targets, "decision": decision,
             "gate": gate, "round_idx": rnd, "seed_status": seed_status,
             "portfolio_history": [{"round": rnd, "gate": gate,
-                                   "hypotheses": [(h.id, pf.STATUS_LABEL[h.status], h.score) for h in hyps],
+                                   "hypotheses": [(h.id, pf.ROUTE_LABEL[h.status], h.score) for h in hyps],
                                    "targets": [f"{links[k].subject_label} -> {links[k].object_label}"
                                                for k in targets]}]}
 
@@ -632,7 +635,7 @@ def review(state, rt):
         return {}
     hyps = [_as(Hypothesis, h) for h in state["hypotheses"]]
     answer = interrupt({"message": "Drop pathways by id, e.g. {'drop': ['H2']}",
-                        "pathways": [(h.id, h.name, pf.STATUS_LABEL[h.status], h.score) for h in hyps]}) or {}
+                        "pathways": [(h.id, h.name, pf.ROUTE_LABEL[h.status], h.score) for h in hyps]}) or {}
     return {"hypotheses": [h for h in hyps if h.id not in set(answer.get("drop", []))]}
 
 
@@ -684,15 +687,18 @@ def synthesize(state, rt):
     for h in hyps:
         for k in h.links:
             tags.setdefault(k, f"L{len(tags) + 1}")
+    mediation = {k: _as(pf.MediationEvidence, v) for k, v in state.get("mediation", {}).items()}
     used = {i for k in tags for i in links[k].support_ids + links[k].corroborating_ids
             + links[k].contradicting_ids + list(links[k].uncounted)}
+    used |= {i for m in mediation.values() for i in m.support_ids + m.against_ids + list(m.uncounted)}
     claims = [c for c in (_as(Claim, x) for x in state["claims"]) if c.id in used]
     conflicts = [_as(Conflict, c) for c in state.get("conflicts", [])]
     warnings = run_warnings(state, rt)
     user = (f"Question: {state['question']}\nGate: {state.get('gate')} | semantic: "
             f"{state.get('semantic_status')} | warnings: {warnings or 'none'}\n\nPathways:\n" +
-            "\n".join(f"[{h.id}] {h.name} | {pf.STATUS_LABEL[h.status]} ({h.reason}) | score={h.score}"
-                      f" | flags={[pf.FLAG_LABEL[f] for f in h.logic_flags]}\n" +
+            "\n".join(f"[{h.id}] {h.name} | {pf.ROUTE_LABEL[h.status]} ({h.reason}) | score={h.score}"
+                      f" | flags={[pf.FLAG_LABEL[f] for f in h.logic_flags]}\n"
+                      + "".join(f"  {line}\n" for line in _blocking_lines(h, links, mediation)) +
                       "\n".join(f"  [{tags[k]}] {links[k].subject_label} --{links[k].relation}--> "
                                 f"{links[k].object_label} | {pf.STATUS_LABEL[links[k].status]} "
                                 f"({links[k].reason}) | grade={links[k].grade} | support="
@@ -741,6 +747,26 @@ def _entailment_verdicts(text, claims, issues) -> dict:
     return {**judged, **{e["sentence"]: e["verdict"] for e in issues if e.get("sentence") in judged}}
 
 
+def _blocking_lines(h, links, mediation, short=False) -> list[str]:
+    """EM-7: per intermediate of a mechanism route, what blocking it did to the exposure's effect."""
+    if pf.is_direct(h):
+        return []
+    by_m = pf.mediation_of(h, mediation)
+    out = []
+    for node in pf.nodes(h.links)[1:-1]:
+        label = pf.labels_of(node, links)
+        meds = by_m.get(node, [])
+        if not meds:
+            out.append(f"blocking {label}: not tested" if short else
+                       f"Blocking {label}: no study tested whether removing or blocking it removes the effect")
+            continue
+        for m in meds:
+            ids = " ".join(f"[{i}]" for i in m.support_ids + m.against_ids)
+            out.append(f"blocking {label} on {m.outcome_label}: {pf.MEDIATION_LABEL[m.status]} ({m.reason})"
+                       + (f" {ids}" if ids else ""))
+    return out
+
+
 def _step_label(ln) -> str:
     label = pf.STATUS_LABEL[ln.status]
     return label if ln.status == "contradicted" or not ln.support_ids else f"{label}, {ln.grade}"
@@ -756,15 +782,21 @@ def verify(state, rt):
     log = shadow.report(rt, state["synthesis"], claims, {o["sentence"] for o in v["overclaims"]},
                         _entailment_verdicts(state["synthesis"], claims, v["entailment"]))
     v["passed"] = v["passed"] and not any(e["verdict"] == "unsupported" for e in v["entailment"])
-    table = ["| Pathway | Verdict | Why | Score | Source | Logic warnings | Steps |",
-             "|---|---|---|---|---|---|---|"]
+    mediation = {k: _as(pf.MediationEvidence, v) for k, v in state.get("mediation", {}).items()}
+    table = ["| Pathway | Verdict | Why | Score | Source | Logic warnings | Blocking test | Steps |",
+             "|---|---|---|---|---|---|---|---|"]
     for h in hyps:
-        table.append(f"| {h.id} {h.name} | {pf.STATUS_LABEL[h.status]} | {h.reason} | {h.score} | "
+        table.append(f"| {h.id} {h.name} | {pf.ROUTE_LABEL[h.status]} | {h.reason} | {h.score} | "
                      f"{pf.ORIGIN_LABEL[h.origin]} | {'; '.join(pf.FLAG_LABEL[f] for f in h.logic_flags) or '-'} | "
+                     f"{'; '.join(_blocking_lines(h, links, mediation, short=True)) or '-'} | "
                      + "; ".join(f"{tags[k]} {links[k].subject_label}→{links[k].object_label} "
                                  f"({_step_label(links[k])})" for k in h.links) + " |")
     p = _as(ParsedQuestion, state["parsed"])
-    stop = (f"Search stopped after {state['round_idx']} rounds: {pf.STOP_LABEL[state['gate']]}. "
+    direct = [h for h in hyps if pf.is_direct(h)]
+    headline = ("Direct effect: " + "; ".join(f"{links[h.links[0]].subject_label} → {links[h.links[0]].object_label}: "
+                                             f"{pf.ROUTE_LABEL[h.status]} ({links[h.links[0]].reason})" for h in direct)
+                if direct else "Direct effect: no study in the ledger tested the exposure against the outcome itself")
+    stop = (f"{headline}. Search stopped after {state['round_idx']} rounds: {pf.STOP_LABEL[state['gate']]}. "
             f"Outcome measured as: {', '.join([p.outcome] + p.outcome_readouts)}. "
             + (f"Question analysed as a decrease of {p.exposure}. " if p.exposure_change == "down" else "") +
             f"Population: {p.target_system}. Scores rank pathways; they are not probabilities.")
@@ -808,7 +840,8 @@ def build_agent(rt: Runtime, checkpointer=None):
     # Checkpoints hold B-MiRA's pydantic models; newer LangGraph releases refuse to restore
     # unregistered types, so they are allowed explicitly.
     allowed = [("bmira.schemas", n) for n in ("ParsedQuestion", "SearchQuery", "Paper", "Claim",
-                                               "PairAdjudication", "Conflict", "LinkEvidence", "Hypothesis")]
+                                               "PairAdjudication", "Conflict", "LinkEvidence", "Hypothesis",
+                                               "MediationEvidence")]
     saver = checkpointer or InMemorySaver(serde=JsonPlusSerializer(allowed_msgpack_modules=allowed))
     return g.compile(checkpointer=saver)
 

@@ -282,13 +282,36 @@ class LinkEvidence(BaseModel):
     exhausted: bool = False
 
 
+class MediationEvidence(BaseModel):
+    """Blocking tests of one intermediate M on the exposure X's effect on an outcome or readout Y (EM-3)."""
+    key: str                                       # "exposure|mediator|outcome"
+    exposure: str
+    mediator: str
+    outcome: str
+    mediator_label: str = ""
+    outcome_label: str = ""
+    support_ids: list[str] = Field(default_factory=list)    # effect abolished or attenuated without M
+    against_ids: list[str] = Field(default_factory=list)    # effect unchanged without M, counted (R5 analogue)
+    uncounted: dict = Field(default_factory=dict)            # claim id -> why it does not count
+    n_support_papers: int = 0
+    n_against_papers: int = 0
+    grade: GRADES = "ungraded"                     # best primary grade among support
+    status: Literal["demonstrated", "refuted", "insufficient"] = "insufficient"
+    reason: str = ""
+
+
 class Hypothesis(BaseModel):
     id: str
     name: str
     origin: Literal["llm_seed", "llm_expansion", "ledger_path", "user"]
     links: list[str]                               # LinkEvidence keys, in order
     rationale: str = ""
-    status: Literal["supported", "contradicted", "insufficient"] = "insufficient"
+    # Mechanism routes (EM-4): demonstrated (a blocking test of an intermediate removed the effect),
+    # assembled (every step supported by separate studies, contexts coherent), refuted (removing the
+    # intermediate left the effect), contradicted, insufficient. A direct exposure -> outcome route keeps
+    # the step verdicts: supported, contradicted, insufficient.
+    status: Literal["demonstrated", "assembled", "supported", "refuted", "contradicted",
+                    "insufficient"] = "insufficient"
     reason: str = ""
     open: bool = True                              # still worth searching (internal)
     score: float = 0.0

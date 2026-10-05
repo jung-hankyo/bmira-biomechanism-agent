@@ -10,7 +10,7 @@ from collections import defaultdict
 from bmira.evidence import SYSTEM_RANK, stance
 from bmira.normalize import entity_change, entity_of
 from bmira.schemas import (ASSOCIATIVE_RELATIONS, BLOCKING_ONLY, DIRECTION, NULL_RELATIONS, RELATION_SET,
-                           SYSTEM_GROUP, TIER, Hypothesis, LinkEvidence)
+                           SYSTEM_GROUP, TIER, Hypothesis, LinkEvidence, MediationEvidence)
 
 QUALITY = {"ungraded": 0.0, "weak": 0.4, "moderate": 0.7, "strong": 1.0}
 SIGNED = {"increases": 1, "decreases": -1, "required_for": 1, "sufficient_for": 1}
@@ -20,9 +20,16 @@ DOWNSTREAM_ONLY = {"phenotype", "disease"}
 LOGIC_PENALTY = {"disconnected": 0.5, "sign_mismatch": 0.5, "cycle": 0.7,
                  "reverse_order": 0.8, "cross_context": 0.85, "sign_unknown": 0.9}
 
-# Display labels: the only names a reader of the report sees.
+# Display labels: the only names a reader of the report sees. Steps (links) use STATUS_LABEL; pathways use
+# ROUTE_LABEL (EM-4, owner decision D3: proposed labels). "Assembled" never displays as "Supported" (D6).
 STATUS_LABEL = {"supported": "Supported", "contradicted": "Contradicted",
                 "insufficient": "Insufficient evidence"}
+ROUTE_LABEL = {"demonstrated": "Shown by a blocking experiment", "assembled": "Assembled from separate studies",
+               "refuted": "Mediator not required", "supported": "Supported", "contradicted": "Contradicted",
+               "insufficient": "Insufficient evidence"}
+MEDIATION_LABEL = {"demonstrated": "shown", "refuted": "effect persisted", "insufficient": "inconclusive"}
+# Sort and convergence order. A direct route's 'supported' ranks with 'assembled'.
+ROUTE_TIER = {"demonstrated": 4, "assembled": 3, "supported": 3, "insufficient": 2, "refuted": 1, "contradicted": 0}
 ORIGIN_LABEL = {"llm_seed": "LLM proposal", "llm_expansion": "LLM expansion",
                 "ledger_path": "Found in literature graph", "user": "Added by user"}
 FLAG_LABEL = {"disconnected": "steps do not connect",
@@ -187,6 +194,99 @@ def build_links(claims, prior: dict, pair_cache: dict, labels: dict, settings, e
     return out
 
 
+# ── mediation (blocking tests) ──────────────────────────────────────────────
+def mediation_key(exposure: str, mediator: str, outcome: str) -> str:
+    return f"{exposure}|{mediator}|{outcome}"
+
+
+def build_mediation(claims, exposure: str, named: set, ancestors: dict, labels: dict, settings,
+                    canon=lambda x: x) -> dict:
+    """EM-3: blocking tests indexed by (exposure, mediator, outcome or readout). Rules mirror the step rules:
+    R1 reviews never count; R5 an 'unchanged' result counts against only with a comparator and a grade at
+    least the best support; R9 a finding on a descendant of a named outcome supports it but never counts
+    against it. Demonstrated: one moderate-or-better supporting paper and an opposing share below the
+    contradiction threshold ('1 study' or 'replicated'). Refuted: moderate-or-better opposing papers at or
+    above the threshold."""
+    groups = defaultdict(lambda: {"support": [], "against": [], "uncounted": {}})
+    for c in claims:
+        if not c.is_blocking_test or not c.effect_exposure_concept:
+            continue
+        if canon(c.effect_exposure_concept) != exposure:
+            continue                                  # a blocking test of another treatment's effect
+        m, y = canon(c.subject_concept), canon(c.object_concept)
+        if m == exposure or m in named:
+            continue                                  # the exposure or the outcome cannot mediate itself
+        targets = [(y, True)] if y in named else [
+            (a, False) for a in sorted(set(ancestors.get(y, ())) & named)]
+        for target, exact in targets:
+            g = groups[mediation_key(exposure, m, target)]
+            if c.study_type == "review":
+                g["uncounted"][c.id] = "secondary source (review)"                     # R1
+            elif c.effect_result in {"abolished", "attenuated"}:
+                g["support"].append(c)
+            elif c.effect_result == "unchanged" and exact:
+                g["against"].append(c)
+            elif c.effect_result == "unchanged":
+                g["uncounted"][c.id] = "a subtype finding never counts against the parent"   # R9
+            else:
+                g["uncounted"][c.id] = "effect larger without the mediator"
+    out, thr = {}, settings.contradiction_threshold
+    for key in sorted(groups):
+        g = groups[key]
+        x, m, y = split_key(key)
+        best = max((c.grade for c in g["support"]), key=TIER.get, default="ungraded")
+        against = []
+        for c in g["against"]:
+            if c.comparator_present and TIER[c.grade] >= TIER[best]:
+                against.append(c)
+            else:
+                g["uncounted"][c.id] = "null result weaker than the support"           # R5
+        sup_papers = {c.pmid for c in g["support"]}
+        con_papers = {c.pmid for c in against} - sup_papers
+        con_grade = max((c.grade for c in against), key=TIER.get, default="ungraded")
+        total = len(sup_papers) + len(con_papers)
+        share = len(con_papers) / total if total else 0.0
+        n = len(sup_papers)
+        if sup_papers and TIER[best] >= 2 and share < thr:
+            status, reason = "demonstrated", (f"replicated in {n} studies" if n > 1 else "1 study") + f", {best}"
+        elif con_papers and TIER[con_grade] >= 2 and share >= thr:
+            status, reason = "refuted", f"effect persisted without it in {len(con_papers)} of {total} studies"
+        elif sup_papers and share >= thr:
+            status, reason = "insufficient", "blocking tests disagree"
+        elif sup_papers:
+            status, reason = "insufficient", f"only weak blocking evidence ({n} {'study' if n == 1 else 'studies'})"
+        elif g["uncounted"] and not against:
+            status, reason = "insufficient", "no blocking test that counts"
+        else:
+            status, reason = "insufficient", "only weak opposing evidence"
+        out[key] = MediationEvidence(
+            key=key, exposure=x, mediator=m, outcome=y, mediator_label=labels.get(m, m),
+            outcome_label=labels.get(y, y), support_ids=sorted(c.id for c in g["support"]),
+            against_ids=sorted(c.id for c in against), uncounted=g["uncounted"], n_support_papers=n,
+            n_against_papers=len(con_papers), grade=best, status=status, reason=reason)
+    return out
+
+
+def mediation_of(h, mediation: dict) -> dict:
+    """Intermediate node -> its mediation records, for the intermediates of one route."""
+    mids = set(nodes(h.links)[1:-1])
+    out = defaultdict(list)
+    for med in mediation.values():
+        if med.mediator in mids:
+            out[med.mediator].append(med)
+    return out
+
+
+def contexts_compatible(a, b, ancestors=None) -> bool:
+    """EM-5: adjacent steps fit together when either context is unspecified, they share one, or one is
+    an ancestor of the other (a step in regulatory T cells and one in T cells)."""
+    a, b = set(a) - {"unspecified", ""}, set(b) - {"unspecified", ""}
+    if not a or not b or a & b:
+        return True
+    anc = ancestors or {}
+    return any(x in anc.get(y, ()) or y in anc.get(x, ()) for x in a for y in b)
+
+
 # ── pathways ────────────────────────────────────────────────────────────────
 def proposal_keys(pathway, resolver, stop_at=frozenset()) -> tuple[list[str], dict]:
     """Concept keys of a proposed pathway. It ends at the first link that reaches the outcome or
@@ -242,7 +342,7 @@ def pathway_sign(expected: str, exposure_change: str) -> str:
     return expected
 
 
-def logic_check(keys, links, categories, expected: str):
+def logic_check(keys, links, categories, expected: str, ancestors=None):
     """Deterministic biological-logic screen; returns (factor, flags)."""
     flags = []
     pairs = [split_key(k) for k in keys]
@@ -259,8 +359,8 @@ def logic_check(keys, links, categories, expected: str):
     if any(categories.get(s) in DOWNSTREAM_ONLY and categories.get(o) in MOLECULAR
            for s, _, o in pairs):
         flags.append("reverse_order")
-    ctx = [set(links[k].contexts) - {"unspecified"} for k in keys if k in links]
-    if any(a and b and not (a & b) for a, b in zip(ctx, ctx[1:])):
+    ctx = [links[k].contexts for k in keys if k in links]
+    if not all(contexts_compatible(a, b, ancestors) for a, b in zip(ctx, ctx[1:])):
         flags.append("cross_context")
     factor = math.prod(LOGIC_PENALTY.get(f, 1.0) for f in flags)
     return round(factor, 3), flags
@@ -322,20 +422,42 @@ def novel_intermediates(links, hyps, exposure, outcomes) -> list[str]:
                    if a not in used and b in used})
 
 
-def evaluate(hyps, links, categories, expected, settings):
-    """Score and label from evidence only. A pathway stays open for search while it is
-    insufficient and none of its steps has been searched out."""
+def evaluate(hyps, links, categories, expected, settings, mediation=None, ancestors=None):
+    """Score and label from evidence only (EM-4). Precedence for a mechanism route: contradicted (a step is)
+    -> demonstrated (blocking an intermediate removed the exposure's effect, no step contradicted) ->
+    assembled (every step supported, adjacent contexts compatible) -> refuted (removing an intermediate left
+    the effect, none shown) -> insufficient. A direct route keeps the step verdicts. A pathway stays open
+    for search while it is insufficient and none of its steps has been searched out."""
+    mediation = mediation or {}
     for h in hyps:
-        h.logic_factor, h.logic_flags = logic_check(h.links, links, categories, expected)
+        h.logic_factor, h.logic_flags = logic_check(h.links, links, categories, expected, ancestors)
         ls = [links[k] for k in h.links]
         h.score = round(h.logic_factor * min((ln.completeness for ln in ls), default=0.0), 3)
         step = lambda ln: f"{ln.subject_label} → {ln.object_label}"
         bad = next((ln for ln in ls if ln.status == "contradicted"), None)
         gap = next((ln for ln in ls if ln.status == "insufficient" and ln.exhausted), None)
+        meds = [m for ms in mediation_of(h, mediation).values() for m in ms]
+        shown = next((m for m in meds if m.status == "demonstrated"), None)
+        refuted = next((m for m in meds if m.status == "refuted"), None)
+        all_supported = bool(ls) and all(ln.status == "supported" for ln in ls)
+        coherent = all(contexts_compatible(a.contexts, b.contexts, ancestors) for a, b in zip(ls, ls[1:]))
         if bad:
             h.status, h.reason = "contradicted", f"{step(bad)}: {bad.reason}"
-        elif ls and all(ln.status == "supported" for ln in ls):
-            h.status, h.reason = "supported", "every step has independent support"
+        elif is_direct(h):
+            h.status, h.reason = ("supported", "every step has independent support") if all_supported else \
+                ("insufficient", f"{step(ls[0])}: {ls[0].reason}")
+        elif shown:
+            h.status, h.reason = "demonstrated", (f"blocking {shown.mediator_label} removed the effect on "
+                                                  f"{shown.outcome_label} ({shown.reason})")
+        elif all_supported and coherent:
+            untested = [labels_of(n, links) for n in nodes(h.links)[1:-1]]
+            h.status, h.reason = "assembled", ("every step supported by separate studies; " + (
+                f"but blocking {refuted.mediator_label}: {refuted.reason}" if refuted     # precedence: handoff EM-4
+                else "no blocking test of " + ", ".join(untested)))
+        elif refuted:
+            h.status, h.reason = "refuted", (f"blocking {refuted.mediator_label}: {refuted.reason}")
+        elif all_supported:
+            h.status, h.reason = "insufficient", "every step supported, but the steps were shown in different cell types"
         else:
             weakest = gap or min(ls, key=lambda ln: ln.completeness)
             done = sum(ln.status == "supported" for ln in ls)
@@ -344,9 +466,9 @@ def evaluate(hyps, links, categories, expected, settings):
         h.open = h.status == "insufficient" and gap is None
     # the score is gated by the weakest step, so on sparse literature every route scores 0: order those by progress
     progress = {h.id: sum(links[k].completeness for k in h.links) / max(1, len(h.links)) for h in hyps}
-    hyps.sort(key=lambda h: (-h.score, -progress[h.id], h.id))
-    keep = [h for h in hyps if h.status == "supported"]
-    rest = [h for h in hyps if h.status != "supported"]
+    hyps.sort(key=lambda h: (-ROUTE_TIER[h.status], -h.score, -progress[h.id], h.id))
+    keep = [h for h in hyps if ROUTE_TIER[h.status] >= ROUTE_TIER["assembled"]]
+    rest = [h for h in hyps if ROUTE_TIER[h.status] < ROUTE_TIER["assembled"]]
     room = max(0, settings.max_hypotheses - sum(not is_direct(h) for h in keep))
     cut = {h.id for h in [h for h in rest if not is_direct(h)][room:]}          # direct routes are never cut
     return keep + [h for h in rest if h.id not in cut]
@@ -387,16 +509,39 @@ def allocate(hyps, links, settings, round_idx: int) -> list[str]:
     return chosen
 
 
+def reachable_tier(h) -> int:
+    """The highest tier an open route could still reach: a route with an intermediate can be shown by a
+    blocking test; a one-step route can at best be supported."""
+    return ROUTE_TIER["demonstrated"] if len(nodes(h.links)) > 2 else ROUTE_TIER["assembled"]
+
+
 def decide(hyps, targets, completed_rounds: int, settings) -> tuple[str, str]:
+    """CONVERGED only when the leading mechanism route is at least assembled and no open rival could reach a
+    higher tier, or the same tier with a better score. Direct routes answer 'does X affect Y', not 'how',
+    so they lead only when there is no mechanism route."""
     if not targets:                                # checked first: an honest stop reason
         return "done", "NO_TARGETS"
     if completed_rounds >= settings.max_rounds:
         return "done", "MAX_ROUNDS"
-    leader = hyps[0] if hyps else None
-    rivals = [h.logic_factor for h in hyps[1:] if h.open]
-    if leader and leader.status == "supported" and leader.score >= max(rivals, default=0):
-        return "done", "CONVERGED"                 # no rival can overtake even if fully supported
+    mech = [h for h in hyps if not is_direct(h)]
+    leader = (mech or hyps or [None])[0]
+    if leader and ROUTE_TIER[leader.status] >= ROUTE_TIER["assembled"]:
+        lt = ROUTE_TIER[leader.status]
+        rivals = [h for h in hyps if h is not leader and h.open and (h in mech or not mech)]
+        if not any(reachable_tier(h) > lt or (reachable_tier(h) == lt and h.logic_factor > leader.score)
+                   for h in rivals):
+            return "done", "CONVERGED"
     return "search_more", "TARGETED"
+
+
+def labels_of(node: str, links) -> str:
+    """Display label of a node, from any link that touches it."""
+    for ln in links.values():
+        if ln.subject == node:
+            return ln.subject_label
+        if ln.object == node:
+            return ln.object_label
+    return node
 
 
 def label_pathway(h: Hypothesis, links) -> str:

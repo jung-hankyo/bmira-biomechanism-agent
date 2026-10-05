@@ -110,3 +110,130 @@ def test_the_judge_sees_kept_and_rejected_blocking_tests():
     assert by[("blocking_test", "Cp5_0")]["current"] is True and by[("blocking_test", "Cp5_1")]["current"] is False
     assert by[("blocking.effect_result", "Cp5_0")]["jev"] == "abolished"
     assert ("stance", "Cp5_1") not in by                        # a rejected blocking test has no stance to judge
+
+
+# ── EM-3: the mediation index ───────────────────────────────────────────────
+def _block(i, pmid, result, grade="moderate", mediator="LOCAL:m", outcome="LOCAL:y", exposure="LOCAL:x", **kw):
+    c = make_claim(i, pmid, "required_for", grade=grade, subj=mediator, obj=outcome, **kw)
+    c.effect_exposure, c.effect_result, c.effect_exposure_concept = "x", result, exposure
+    return c
+
+
+def _index(claims, ancestors=None):
+    return pf.build_mediation(claims, "LOCAL:x", {"LOCAL:y", "LOCAL:r"}, ancestors or {}, {}, Settings())
+
+
+KEY = pf.mediation_key("LOCAL:x", "LOCAL:m", "LOCAL:y")
+
+
+def test_one_moderate_blocking_test_demonstrates_and_two_replicate():
+    m = _index([_block("a", "p1", "abolished")])[KEY]
+    assert m.status == "demonstrated" and m.reason == "1 study, moderate" and m.support_ids == ["a"]
+    m = _index([_block("a", "p1", "abolished"), _block("b", "p2", "attenuated", grade="strong")])[KEY]
+    assert m.reason == "replicated in 2 studies, strong" and m.n_support_papers == 2
+
+
+def test_weak_reviewed_or_other_blocking_tests_do_not_demonstrate():
+    assert _index([_block("a", "p1", "abolished", grade="weak")])[KEY].reason == "only weak blocking evidence (1 study)"
+    rev = _index([_block("a", "p1", "abolished", study_type="review")])[KEY]
+    assert rev.status == "insufficient" and rev.uncounted == {"a": "secondary source (review)"}       # R1
+    assert _index([_block("a", "p1", "abolished", exposure="LOCAL:other")]) == {}   # another treatment's effect
+    assert _index([_block("a", "p1", "abolished", mediator="LOCAL:x")]) == {}       # the exposure cannot mediate
+    assert _index([_block("a", "p1", "enhanced")])[KEY].uncounted == {"a": "effect larger without the mediator"}
+
+
+def test_an_unchanged_effect_refutes_only_when_it_is_as_strong_as_the_support():
+    strong_null = [_block("a", "p1", "abolished"), _block("n1", "p2", "unchanged"), _block("n2", "p3", "unchanged")]
+    m = _index(strong_null)[KEY]
+    assert m.status == "refuted" and m.against_ids == ["n1", "n2"]
+    weak_null = [_block("a", "p1", "abolished"), _block("n", "p2", "unchanged", grade="weak")]
+    m = _index(weak_null)[KEY]
+    assert m.status == "demonstrated" and m.uncounted == {"n": "null result weaker than the support"}      # R5
+    no_control = _block("n", "p2", "unchanged")
+    no_control.comparator_present = False
+    assert _index([_block("a", "p1", "abolished"), no_control])[KEY].status == "demonstrated"
+    tied = _index([_block("a", "p1", "abolished"), _block("n", "p2", "unchanged")])[KEY]
+    assert tied.status == "refuted"                         # 1 of 2 papers against: share 0.5 >= threshold
+
+
+def test_a_subtype_outcome_supports_its_parent_but_never_refutes_it():
+    anc = {"LOCAL:sub": ("LOCAL:y",)}
+    m = _index([_block("a", "p1", "abolished", outcome="LOCAL:sub")], anc)[KEY]
+    assert m.status == "demonstrated"                                                                    # R9
+    m = _index([_block("a", "p1", "abolished"), _block("n", "p2", "unchanged", outcome="LOCAL:sub")], anc)[KEY]
+    assert m.status == "demonstrated" and "never counts against" in m.uncounted["n"]
+
+
+# ── EM-4, EM-5: route verdicts ──────────────────────────────────────────────
+def _route(*statuses, contexts=None, origin="llm_seed"):
+    names = ["LOCAL:x", "LOCAL:m", "LOCAL:y"] if len(statuses) == 2 else ["LOCAL:x", "LOCAL:y"]
+    keys = [pf.link_key(a, "increases", b) for a, b in zip(names, names[1:])]
+    links = {k: pf.LinkEvidence(key=k, subject=k.split("|")[0], relation="increases", object=k.split("|")[2],
+                                subject_label=k.split("|")[0][6:], object_label=k.split("|")[2][6:],
+                                status=st, completeness=0.7 if st == "supported" else 0.0,
+                                contexts=(contexts or {}).get(i, []), reason=st)
+             for i, (k, st) in enumerate(zip(keys, statuses))}
+    from bmira.schemas import Hypothesis
+    return Hypothesis(id="H1", name="r", origin=origin, links=keys), links
+
+
+def _verdict(h, links, mediation=None, ancestors=None):
+    (out,) = pf.evaluate([h], links, {}, "up", Settings(), mediation, ancestors)
+    return out.status, out.reason
+
+
+def test_route_verdict_precedence():
+    shown = _index([_block("a", "p1", "abolished")])
+    refuted = _index([_block("a", "p1", "abolished"), _block("n1", "p2", "unchanged"), _block("n2", "p3", "unchanged")])
+    assert _verdict(*_route("supported", "supported"))[0] == "assembled"
+    assert _verdict(*_route("supported", "insufficient"), shown)[0] == "demonstrated"   # one blocking test suffices
+    assert _verdict(*_route("contradicted", "supported"), shown)[0] == "contradicted"   # a contradicted step wins
+    status, reason = _verdict(*_route("supported", "supported"), refuted)
+    assert status == "assembled" and "effect persisted" in reason                       # handoff order, said aloud
+    assert _verdict(*_route("supported", "insufficient"), refuted)[0] == "refuted"
+    assert _verdict(*_route("insufficient", "insufficient"))[0] == "insufficient"
+    direct = _route("supported", origin="ledger_path")
+    assert _verdict(*direct, shown)[0] == "supported"                                    # direct routes keep steps
+
+
+def test_assembled_needs_compatible_contexts():
+    anc = {"CL:treg": ("CL:tcell",)}
+    assert _verdict(*_route("supported", "supported", contexts={0: ["CL:treg"], 1: ["CL:tcell"]}), None, anc)[0] \
+        == "assembled"                                                                   # a subtype fits its parent
+    assert _verdict(*_route("supported", "supported", contexts={0: ["unspecified"], 1: ["CL:dc"]}))[0] == "assembled"
+    status, reason = _verdict(*_route("supported", "supported", contexts={0: ["CL:treg"], 1: ["CL:dc"]}), None, anc)
+    assert status == "insufficient" and "different cell types" in reason
+    assert pf.contexts_compatible([], ["CL:dc"]) and not pf.contexts_compatible(["CL:a"], ["CL:b"])
+
+
+def test_convergence_needs_a_mechanism_that_no_rival_can_overtake():
+    from bmira.schemas import Hypothesis
+    s = Settings()
+    lead = Hypothesis(id="H1", name="a", origin="llm_seed", links=["X|i|M", "M|i|Y"], status="assembled",
+                      score=0.7, open=False)
+    rival = Hypothesis(id="H2", name="b", origin="llm_seed", links=["X|i|N", "N|i|Y"], status="insufficient",
+                       logic_factor=0.5, open=True)
+    assert pf.decide([lead, rival], ["t"], 1, s) == ("search_more", "TARGETED")       # the rival could be shown
+    lead.status = "demonstrated"
+    assert pf.decide([lead, rival], ["t"], 1, s) == ("done", "CONVERGED")             # same tier at best, lower score
+    rival.logic_factor = 0.9
+    assert pf.decide([lead, rival], ["t"], 1, s)[1] == "TARGETED"
+    direct = Hypothesis(id="H3", name="d", origin="ledger_path", links=["X|i|Y"], status="supported", score=1.0)
+    rival.logic_factor = 0.5
+    assert pf.decide([direct, rival], ["t"], 1, s)[1] == "TARGETED"                   # a direct route answers 'whether'
+    assert pf.decide([direct], ["t"], 1, s)[1] == "CONVERGED"                         # ... unless it is all there is
+
+
+def test_the_report_shows_the_blocking_test_and_the_direct_effect(offline):
+    _, final = offline
+    report = final["report"]
+    assert "| Blocking test |" in report and "Shown by a blocking experiment" in report
+    assert "blocking Glycolytic flux on CD8 T cell effector function: shown (1 study, moderate) [CS020_0]" in report
+    assert "blocking NAD+: not tested" in report and report.count("Direct effect:") == 1
+
+
+def test_follow_up_context_carries_the_blocking_tests(offline):
+    from bmira.chat import run_context
+    _, final = offline
+    ctx = run_context(final)
+    assert "blocking Glycolytic flux on CD8 T cell effector function: shown" in ctx and "[CS020_0]" in ctx

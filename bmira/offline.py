@@ -11,7 +11,7 @@ import numpy as np
 
 from bmira.config import Settings
 from bmira.normalize import lookup_key
-from bmira.portfolio import STATUS_LABEL
+from bmira.portfolio import ROUTE_LABEL, STATUS_LABEL
 from bmira.schemas import (AliasBatch, AliasVerdict, ClaimList, Conflict, ConflictBatch,
                            EntailmentBatch, EntityResolution, PairAdjudication, PairBatch, Paper,
                            ParsedQuestion, PathwayProposal, QueryPlan, RelationResolution,
@@ -184,14 +184,14 @@ class SurrogateLLM:
         grade_of = {c.id: c.grade for c in ctx["claims"]}
         cite = lambda ids: " ".join(f"[{i}]" for i in ids)
         lines = ["## Summary"]
-        lead = next((h for h in hyps if h.status == "supported"), None)
+        lead = next((h for h in hyps if h.status in {"demonstrated", "assembled", "supported"}), None)
         if lead:
             ids = [i for k in lead.links for i in links[k].support_ids][:4]
             lines.append(f"The best-supported route is {lead.name} [{lead.id}] {cite(ids)}.")
         else:
             lines.append("No pathway reached adequate support for every step [NO_EVIDENCE].")
         for h in hyps:
-            lines.append(f"\n### [{h.id}] {h.name}: {STATUS_LABEL[h.status]} (score {h.score})")
+            lines.append(f"\n### [{h.id}] {h.name}: {ROUTE_LABEL[h.status]} (score {h.score})")
             for k in h.links:
                 ln, t = links[k], tags[k]
                 if not ln.support_ids:
@@ -218,7 +218,7 @@ class SurrogateLLM:
         hyps = [h for h in st["hypotheses"] if hit(h)] or st["hypotheses"]
         out = []
         for h in hyps:
-            out.append(f"[{h.id}] {h.name}: {STATUS_LABEL[h.status]} ({h.reason}).")
+            out.append(f"[{h.id}] {h.name}: {ROUTE_LABEL[h.status]} ({h.reason}).")
             for k in h.links:
                 ln = links[k]
                 ids = " ".join(f"[{i}]" for i in ln.support_ids + ln.contradicting_ids) or "[NO_EVIDENCE]"

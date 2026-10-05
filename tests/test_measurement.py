@@ -51,13 +51,14 @@ def test_census_counts_blocking_tests_that_name_the_exposure(tmp_path):
         {"id": "B4", "subject": "Gpr81", "object": "IFNG", "perturbation_class": "none",     # nothing perturbed
          "span": "Lactate failed to reduce IFNG in Gpr81-/- CD8 T cells."}], abstract)
     r = mediation_census.census(path)
-    assert {x["id"] for x in r["list"]} == {"B1", "B3"} and r["blocking_tests"] == 2 and r["papers"] == 1
-    assert r["perturbed_candidates"] == 3
+    # B1, B3 and the fixture's own blocking test (S020, recorded as such by EM-1)
+    assert {x["id"] for x in r["list"]} == {"B1", "B3", "CS020_0"} and r["blocking_tests"] == 3 and r["papers"] == 2
+    assert r["perturbed_candidates"] == 4 and r["explicit_blocking_tests"] == 1
     assert "Lactate" in r["exposure_surfaces"] or "lactate" in r["exposure_surfaces"]
 
 
 def test_census_cli_prints_a_table(tmp_path, capsys):
     run_session(tmp_path, "only question\n")
     rows = mediation_census.main([str(tmp_path / "s_q1.state.json"), "--list"])
-    assert rows[0]["blocking_tests"] == 0                    # the fixture has no blocking test yet
+    assert rows[0]["blocking_tests"] == rows[0]["explicit_blocking_tests"] == 1     # S020
     assert "| s_q1.state.json |" in capsys.readouterr().out

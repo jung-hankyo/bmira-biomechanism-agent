@@ -26,9 +26,9 @@ from pydantic import BaseModel
 from bmira.graph import build_agent
 from bmira.llm import FatalLLMError
 from bmira.normalize import lookup_key
-from bmira.portfolio import STATUS_LABEL, STOP_LABEL, is_direct
-from bmira.schemas import (Claim, Conflict, Hypothesis, LinkEvidence, PairAdjudication, Paper,
-                           ParsedQuestion, SearchQuery)
+from bmira.portfolio import ROUTE_LABEL, ROUTE_TIER, STATUS_LABEL, STOP_LABEL, is_direct
+from bmira.schemas import (Claim, Conflict, Hypothesis, LinkEvidence, MediationEvidence, PairAdjudication,
+                           Paper, ParsedQuestion, SearchQuery)
 
 
 class _Tee(io.TextIOBase):
@@ -140,6 +140,7 @@ def load_state(path, rt) -> dict:
         if k in st:
             st[k] = model.model_validate(st[k]) if k == "parsed" else [model.model_validate(x) for x in st[k]]
     st["links"] = {k: LinkEvidence.model_validate(v) for k, v in st.get("links", {}).items()}
+    st["mediation"] = {k: MediationEvidence.model_validate(v) for k, v in st.get("mediation", {}).items()}
     rt.pair_cache.update({frozenset(k): PairAdjudication.model_validate(v) for k, v in data["pair_cache"]})
     rt.conflict_cache.update({frozenset(k): Conflict.model_validate(v) for k, v in data["conflict_cache"]})
     rt.alias_verdicts.update({frozenset(k): v for k, v in data["alias_verdicts"]})
@@ -345,14 +346,20 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "searched_out": sum(ln.exhausted for ln in links.values()),
             "supported_off_portfolio": off_paths},
         "pathways": {
-            "count": len(hyps), "verdicts": _count(STATUS_LABEL[h.status] for h in hyps),
+            "count": len(hyps), "verdicts": _count(ROUTE_LABEL[h.status] for h in hyps),
             # direct exposure -> outcome routes answer the question; these count the mechanism routes
-            "mechanism_verdicts": _count(STATUS_LABEL[h.status] for h in hyps if not is_direct(h)),
+            "mechanism_verdicts": _count(ROUTE_LABEL[h.status] for h in hyps if not is_direct(h)),
+            "mechanism_routes_assembled_or_shown": sum(ROUTE_TIER[h.status] >= ROUTE_TIER["assembled"]
+                                                       for h in hyps if not is_direct(h)),
+            "mediation": {"records": len(final.get("mediation", {})),
+                          "verdicts": _count(m.status for m in final.get("mediation", {}).values()),
+                          "shown": [f"{m.mediator_label} -> {m.outcome_label}: {m.reason}"
+                                    for m in final.get("mediation", {}).values() if m.status == "demonstrated"]},
             "origins": _count(h.origin for h in hyps), "logic_flags": _count(f for h in hyps for f in h.logic_flags),
             "leader_per_round": leaders,
             "leader_changes": sum(a != b for a, b in zip(leaders, leaders[1:])),
             "targets_per_round": [len(h["targets"]) for h in history],
-            "ranked": [{"id": h.id, "name": h.name, "origin": h.origin, "verdict": STATUS_LABEL[h.status],
+            "ranked": [{"id": h.id, "name": h.name, "origin": h.origin, "verdict": ROUTE_LABEL[h.status],
                         "reason": h.reason, "score": h.score, "logic_flags": h.logic_flags,
                         "steps": [f"{links[k].subject_label} -{links[k].relation}-> {links[k].object_label}: "
                                   f"{STATUS_LABEL[links[k].status]} ({links[k].reason})" for k in h.links if k in links]}
@@ -474,9 +481,10 @@ RULES = [
     ("unresolved relations", lambda m: _share(m["extraction"]["relations"].get("unresolved", 0),
                                               m["extraction"]["claims_kept"]),
      lambda v: v is not None and v > 0.20, "> 0.20", "normalize.RELATION_LEXICON / PROMPTS['relation']"),
-    ("no pathway supported", lambda m: m["pathways"]["mechanism_verdicts"].get("Supported", 0),
-     lambda v: v == 0, "0 mechanism routes",
-     "evidence too sparse, or min_studies_per_link / R8 too strict; a Supported direct route does not count"),
+    ("no pathway supported", lambda m: m["pathways"]["mechanism_routes_assembled_or_shown"],
+     lambda v: v == 0, "0 mechanism routes assembled or shown by a blocking test",
+     "evidence too sparse, or min_studies_per_link / R8 too strict; a Supported direct route does not count; "
+     "pathways.mediation lists blocking tests"),
     ("many unfound steps", lambda m: _share(m["steps"]["reasons"].get("no study found in N targeted searches", 0),
                                             m["steps"]["count"]),
      lambda v: v is not None and v > 0.50, "> 0.50 of steps", "search recall: synonym query, plan prompt"),

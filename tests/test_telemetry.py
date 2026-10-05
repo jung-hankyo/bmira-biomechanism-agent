@@ -12,7 +12,9 @@ def test_experiment_runner_writes_one_session_file(tmp_path):
                     "comparison", "steps", "pathways", "verification", "signals"):
         assert section in run
     assert run["extraction"]["drop_reasons"]["null claim but the quote reports an effect"] == 1
-    assert run["pathways"]["ranked"][0]["verdict"] == "Supported"
+    assert run["pathways"]["ranked"][0]["verdict"] == "Shown by a blocking experiment"
+    assert run["pathways"]["mediation"]["verdicts"] == {"demonstrated": 1}
+    assert run["extraction"]["blocking_tests"] == {"abolished": 1}
     assert all({"signal", "value", "threshold", "look_at"} <= set(x) for x in run["signals"])
 
 

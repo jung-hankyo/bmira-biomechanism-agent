@@ -40,7 +40,7 @@ def test_portfolio_escapes_lock_in(offline):
     _, final = offline
     hyps = {h.name: h for h in final["hypotheses"]}
     assert final["hypotheses"][0].name == "Redox-metabolic route"
-    assert hyps["Redox-metabolic route"].status == "supported"
+    assert hyps["Redox-metabolic route"].status == "demonstrated"      # EM-4: S020 blocks glycolytic flux
     assert hyps["Redox-metabolic route"].origin == "llm_expansion"
     assert hyps["Chromatin route"].status == "contradicted"
     receptor = hyps["Receptor route"]
@@ -75,8 +75,8 @@ def test_chat_followup(offline):
     from bmira.chat import answer, portfolio_rows
     rt, final = offline
     reply, issues = answer(final, rt, "What supports the redox route?", [])
-    assert "Redox-metabolic route: Supported" in reply and not issues
-    assert portfolio_rows(final)[0]["verdict"] == "Supported"
+    assert "Redox-metabolic route: Shown by a blocking experiment" in reply and not issues
+    assert portfolio_rows(final)[0]["verdict"] == "Shown by a blocking experiment"
 
 
 def test_streamlit_app_offline():

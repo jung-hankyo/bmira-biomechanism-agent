@@ -76,9 +76,9 @@ def investigate(question: str):
 
 def summary(state) -> str:
     lead = state["hypotheses"][0] if state["hypotheses"] else None
-    head = (f"**Leading pathway:** {lead.name}: **{pf.STATUS_LABEL[lead.status]}** "
+    head = (f"**Leading pathway:** {lead.name}: **{pf.ROUTE_LABEL[lead.status]}** "
             f"(score {lead.score}). {lead.reason}." if lead else "**No pathway could be formed.**")
-    counts = pd.Series([pf.STATUS_LABEL[h.status] for h in state["hypotheses"]]).value_counts()
+    counts = pd.Series([pf.ROUTE_LABEL[h.status] for h in state["hypotheses"]]).value_counts()
     tally = ", ".join(f"{n} {label}" for label, n in counts.items())
     warn = "".join(f"\n- ⚠️ {w}" for w in state.get("warnings", []))
     return (f"{head}\n\n{len(state['hypotheses'])} pathways considered: {tally}. "

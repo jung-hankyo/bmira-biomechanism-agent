@@ -12,20 +12,24 @@ def portfolio_rows(state) -> list[dict]:
     links = state["links"]
     return [{"id": h.id, "pathway": " → ".join([links[h.links[0]].subject_label]
                                                + [links[k].object_label for k in h.links]),
-             "verdict": pf.STATUS_LABEL[h.status], "why": h.reason, "score": h.score,
+             "verdict": pf.ROUTE_LABEL[h.status], "why": h.reason, "score": h.score,
              "source": pf.ORIGIN_LABEL[h.origin]} for h in state["hypotheses"]]
 
 
 def run_context(state, max_claims=150) -> str:
     links, hyps = state["links"], state["hypotheses"]
+    from bmira.graph import _blocking_lines
+    mediation = state.get("mediation", {})
     used = {i for h in hyps for k in h.links for i in links[k].support_ids
             + links[k].contradicting_ids + list(links[k].uncounted)}
+    used |= {i for m in mediation.values() for i in m.support_ids + m.against_ids}
     claims = [c for c in state["claims"] if c.id in used][:max_claims]
     lines = [f"Question: {state['question']}",
              f"Search stopped: {pf.STOP_LABEL[state['gate']]} after {state['round_idx']} rounds.",
              "Warnings: " + ("; ".join(state.get("warnings", [])) or "none"), "", "Pathways:"]
     for h in hyps:
-        lines.append(f"[{h.id}] {h.name}: {pf.STATUS_LABEL[h.status]} ({h.reason}), score {h.score}")
+        lines.append(f"[{h.id}] {h.name}: {pf.ROUTE_LABEL[h.status]} ({h.reason}), score {h.score}")
+        lines += [f"  {x}" for x in _blocking_lines(h, links, mediation)]
         for k in h.links:
             ln = links[k]
             lines.append(f"  step {ln.subject_label} -{ln.relation}-> {ln.object_label}: "

@@ -644,6 +644,30 @@
     "Journal Article",
     "Review"
    ]
+  },
+  {
+   "pmid": "S020",
+   "title": "Synthetic: blocking glycolysis removes the lactate effect",
+   "year": "2024",
+   "abstract": "In mouse CD8 T cells, lactate no longer reduced CD8 T cell effector function when glycolysis was blocked with 2-deoxyglucose, compared with vehicle-treated controls. Synthetic fixture.",
+   "keywords": [
+    "glycolytic flux cd8 t cell effector function"
+   ],
+   "study_type": "animal",
+   "claims": [
+    {
+     "claim_type": "observation",
+     "subject": "glycolytic flux",
+     "relation": "no longer reduced",
+     "object": "CD8 T cell effector function",
+     "system": "animal_cells",
+     "perturbation_class": "pharmacological",
+     "comparator_present": true,
+     "effect_exposure": "lactate",
+     "effect_result": "abolished",
+     "span": "In mouse CD8 T cells, lactate no longer reduced CD8 T cell effector function when glycolysis was blocked with 2-deoxyglucose, compared with vehicle-treated controls."
+    }
+   ]
   }
  ]
 }
