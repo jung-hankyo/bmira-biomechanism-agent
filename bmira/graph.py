@@ -20,7 +20,7 @@ from bmira import portfolio as pf
 from bmira import shadow
 from bmira.config import Settings
 from bmira.evidence import grade_claim, is_proposal, prose_sentences, verify_text
-from bmira.llm import PROMPTS
+from bmira.llm import PROMPTS, spent_usd
 from bmira.evidence import claim_study_type, verify_methods
 from bmira.normalize import (EntityResolver, _mentioned, _previous_sentence, abbreviations, check_claim,
                              consolidate_aliases, expand_abbreviations, entity_change, entity_of, entity_parts,
@@ -626,6 +626,10 @@ def portfolio(state, rt):
     used = sum(getattr(rt.llm, "tokens_in", {}).values()) + sum(getattr(rt.llm, "tokens_out", {}).values())
     if decision == "search_more" and s.budget_tokens and used >= s.budget_tokens:
         decision, gate = "done", "BUDGET"            # soft cap: stop searching, still report
+    if decision == "search_more" and s.budget_usd is not None:
+        spent, _ = spent_usd(rt.llm, rt.judge, s.prices)
+        if spent >= max(0.0, s.budget_usd):
+            decision, gate = "done", "COST_BUDGET"
     if decision == "done":
         for k in targets:
             links[k].times_targeted -= 1
@@ -667,6 +671,11 @@ def run_warnings(state, rt) -> list[str]:
         w.append("Conflict triage failed: opposing findings were all counted as contradictions.")
     if state.get("gate") == "BUDGET":
         w.append("Search stopped early because the token budget was reached; open pathways were not searched further.")
+    if state.get("gate") == "COST_BUDGET":
+        w.append("Search stopped early because the cost budget was reached; open pathways were not searched further.")
+    if rt.settings.budget_usd is not None and (missing := spent_usd(rt.llm, rt.judge, rt.settings.prices)[1]):
+        w.append(f"The cost budget cannot see models without a price ({', '.join(missing)}); their tokens were "
+                 "not counted against it.")
     if state.get("gate") == "MAX_ROUNDS":
         w.append("Search stopped at the round limit while some pathways were still open.")
     if state.get("seed_status") == "FAILED":

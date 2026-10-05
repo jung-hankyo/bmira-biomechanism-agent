@@ -55,3 +55,43 @@ def test_a_step_found_only_in_a_review_can_still_be_searched_out():
     not hold the step open forever; an unread primary paper still does."""
     assert _searched("review") == 1
     assert _searched("animal") == 0
+
+
+# ── TE-10: a cost budget ────────────────────────────────────────────────────
+PRICED = {"surrogate": (1000.0, 1000.0)}       # the scripted model, priced so a round costs dollars
+
+
+def test_spend_counts_llm_and_judge_and_names_unpriced_models():
+    from collections import Counter
+    from types import SimpleNamespace
+    from bmira.llm import spent_usd
+    llm = SimpleNamespace(tokens_in=Counter(a=1_000_000, b=10), tokens_out=Counter(a=100_000),
+                          model_of={"a": "gpt-6-sol", "b": "mystery"})
+    judge = SimpleNamespace(tokens_in=Counter(screen=1_000_000), model="jev-1.13.0", model_of={})
+    prices = {"gpt-6-sol": (2.0, 10.0), "jev-1.13.0": (0.042, 0.0)}
+    assert spent_usd(llm, judge, prices) == (round(3.0 + 0.042, 4), ["mystery"])
+    assert spent_usd(llm, None, prices)[0] == 3.0
+
+
+def test_a_cost_budget_stops_the_search_and_still_reports():
+    rt, sc = offline_runtime(budget_usd=0.01, prices=PRICED)
+    final, info = execute(sc["question"], rt, echo=False)
+    m = summarize(final, rt, info)
+    assert final["gate"] == "COST_BUDGET" and final["round_idx"] == 1 and final["report"]
+    assert m["run"]["stop_reason"] == "cost budget reached" and "cost budget reached" in {s["signal"] for s in m["signals"]}
+    assert any("cost budget was reached" in w for w in final["warnings"]) and m["llm"]["budget_usd"] == 0.01
+
+
+def test_a_budget_that_cannot_see_the_model_says_so():
+    rt, sc = offline_runtime(budget_usd=0.01)                     # the scripted model has no price
+    final, _ = execute(sc["question"], rt, echo=False)
+    assert final["gate"] != "COST_BUDGET"
+    assert any("models without a price (surrogate)" in w for w in final["warnings"])
+
+
+def test_a_zero_budget_from_the_command_line_stops_after_one_round(tmp_path):
+    from helpers import run_session
+    session = run_session(tmp_path, "one\n", "--budget-usd", "0")
+    assert session["session"]["budget_usd"] == 0.0
+    run = session["runs"][0]
+    assert run["run"]["rounds"] == 1 and any("unpriced" in w or "without a price" in w for w in run["warnings"])

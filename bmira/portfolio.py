@@ -39,7 +39,7 @@ FLAG_LABEL = {"disconnected": "steps do not connect",
               "cross_context": "steps shown in different cell types",
               "sign_unknown": "net direction undefined"}
 STOP_LABEL = {"MAX_ROUNDS": "round limit reached", "NO_TARGETS": "nothing left to search",
-              "BUDGET": "token budget reached",
+              "BUDGET": "token budget reached", "COST_BUDGET": "cost budget reached",
               "CONVERGED": "leading pathway cannot be overtaken", "TARGETED": "searching"}
 
 

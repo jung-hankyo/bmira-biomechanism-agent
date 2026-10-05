@@ -24,7 +24,7 @@ from bmira import __version__
 from pydantic import BaseModel
 
 from bmira.graph import build_agent
-from bmira.llm import FatalLLMError
+from bmira.llm import FatalLLMError, estimate_cost  # noqa: F401 - estimate_cost is part of this module's API
 from bmira.normalize import lookup_key
 from bmira.portfolio import ROUTE_LABEL, ROUTE_TIER, STATUS_LABEL, STOP_LABEL, is_direct
 from bmira.schemas import (Claim, Conflict, Hypothesis, LinkEvidence, MediationEvidence, PairAdjudication,
@@ -190,11 +190,6 @@ def git_state() -> dict:
     return {"commit": git_commit(), "uncommitted_changes": bool(changed), "changed_files": changed}
 
 
-def estimate_cost(model, tokens_in, tokens_out, prices) -> float | None:
-    p = prices.get(model)
-    return round((tokens_in * p[0] + tokens_out * p[1]) / 1e6, 4) if p else None
-
-
 def summarize(final: dict, rt, run: dict) -> dict:
     s, llm, res = rt.settings, rt.llm, rt.resolver
     papers, claims = final.get("papers", []), final.get("claims", [])
@@ -265,7 +260,7 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "total_failures": sum(v["failures"] for v in per_task.values()),
             "est_cost_usd": llm_cost,
             "cost_complete": all(c is not None for c in costs),
-            "budget_tokens": s.budget_tokens},
+            "budget_tokens": s.budget_tokens, "budget_usd": s.budget_usd},
         "judge": judge,
         "est_cost_usd_total": round((llm_cost or 0) + (judge.get("est_cost_usd") or 0), 4)
         if llm_cost is not None or judge.get("est_cost_usd") else None,
@@ -501,6 +496,8 @@ RULES = [
      "see status, error and failed_node; metrics cover completed steps only"),
     ("token budget reached", lambda m: m["run"]["stop_reason"], lambda v: v == STOP_LABEL["BUDGET"],
      "budget hit", "Settings.budget_tokens, or cost drivers in llm.per_task"),
+    ("cost budget reached", lambda m: m["run"]["stop_reason"], lambda v: v == STOP_LABEL["COST_BUDGET"],
+     "budget hit", "Settings.budget_usd, or cost drivers in llm.per_task (tools/token_anatomy.py)"),
     ("semantic layer degraded", lambda m: m["comparison"]["semantic_status"],
      lambda v: v in {"PARTIAL", "UNAVAILABLE"}, "PARTIAL / UNAVAILABLE", "semantic.adjudicate batches"),
     ("pair verdicts lost", lambda m: _share(m["comparison"]["pairs_judged"], m["comparison"]["pairs_asked"]),

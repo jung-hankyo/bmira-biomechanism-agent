@@ -191,6 +191,28 @@ FATAL = re.compile(r"insufficient_quota|credit_balance|credit balance|billing|in
                    r"unrecognized request argument", re.I)
 
 
+def estimate_cost(model, tokens_in, tokens_out, prices) -> float | None:
+    p = prices.get(model)
+    return round((tokens_in * p[0] + tokens_out * p[1]) / 1e6, 4) if p else None
+
+
+def spent_usd(llm, judge, prices) -> tuple[float, list[str]]:
+    """Estimated spend so far over every LLM task and the judge, and the models that have no price (their
+    tokens are not counted, so a budget cannot see them)."""
+    total, missing = 0.0, set()
+    sources = [(llm, getattr(llm, "tokens_out", {}))] + ([(judge, {})] if judge is not None else [])
+    for client, out in sources:
+        tin = getattr(client, "tokens_in", {})
+        for t in set(tin) | set(out):
+            model = getattr(client, "model_of", {}).get(t) or getattr(client, "model", None)
+            cost = estimate_cost(model, tin.get(t, 0), out.get(t, 0), prices)
+            if cost is None:
+                missing.add(str(model or t))
+            else:
+                total += cost
+    return round(total, 4), sorted(missing)
+
+
 def is_fatal(e: BaseException) -> bool:
     return getattr(e, "status_code", None) in (401, 403, 404) or bool(FATAL.search(str(e)))
 

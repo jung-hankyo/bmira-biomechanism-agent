@@ -65,6 +65,10 @@ class Settings:
     # when reached, searching stops and the report is written from what was found.
     # None = no cap. Also set a hard spend limit at the provider as the real backstop.
     budget_tokens: int | None = None
+    # Soft budget in USD per run (TE-10): the estimated spend of every LLM task and the judge, from
+    # `prices`, checked between rounds like budget_tokens. Models without a price are not counted and
+    # are named in the run warnings. None = no cap.
+    budget_usd: float | None = None
     # USD per 1M tokens (input, output), for cost estimates in telemetry only. Edit to your
     # provider's current prices; a model missing here shows no estimate. OpenAI figures:
     # official changelog; Anthropic figures: published list prices (both checked 2026-10-03).

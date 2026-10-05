@@ -58,6 +58,8 @@ def main(argv=None) -> Path:
     ap.add_argument("--judge", default="off", choices=["off", "jev"],
                     help="decision model in shadow mode: asks and logs beside today's decisions, changes nothing "
                          "(needs TYPESAFE_API_KEY; --offline uses a scripted judge)")
+    ap.add_argument("--budget-usd", type=float, default=None,
+                    help="soft cost cap per run in USD (LLM and judge, from Settings.prices); searching stops when reached")
     ap.add_argument("--no-preflight", action="store_true", help="skip the checks before the session")
     ap.add_argument("--offline", action="store_true", help="scripted model and synthetic papers")
     ap.add_argument("--quiet", action="store_true", help="do not echo the pipeline log")
@@ -75,6 +77,8 @@ def main(argv=None) -> Path:
     overrides = {k: v for k, v in (("max_rounds", a.max_rounds), ("budget_tokens", a.budget_tokens)) if v}
     if a.judge != "off":
         overrides["judge_provider"] = a.judge
+    if a.budget_usd is not None:                   # 0 is a valid cap: stop after the first round
+        overrides["budget_usd"] = a.budget_usd
     try:
         probe, _ = _runtime(a, overrides)
         s, built = probe.settings, None
@@ -86,6 +90,7 @@ def main(argv=None) -> Path:
         "git": git_state(), "python": platform.python_version(), "mode": "replay" if a.replay else "offline" if a.offline else "live",
         "provider": a.provider, "models": s.models.get(s.provider), "temperature": s.temperature,
         "reasoning_effort": s.reasoning_effort, "max_rounds": s.max_rounds, "budget_tokens": s.budget_tokens,
+        "budget_usd": s.budget_usd,
         "judge": {"provider": s.judge_provider, "model": s.judge_model, "mode": s.judge_mode},
         "questions_file": str(a.questions), "argv": sys.argv[1:] if argv is None else argv}, "runs": []}
 
