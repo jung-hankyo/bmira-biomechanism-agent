@@ -236,6 +236,17 @@ def claim_cap(c) -> int:
     return min(cap, 1) if c.relation_norm in ASSOCIATIVE_RELATIONS else cap
 
 
+# RP-1: the strongest wording a citation allows, computed before writing (the verifier checks the same caps)
+WORDING = {0: "no claim of effect", 1: "association only ('associated with', 'reported in one study')",
+           2: "hedged ('may', 'suggests')", 3: "effect verbs with the system named ('increased X in mice')",
+           4: "causal verbs ('causes', 'is required for')"}
+
+
+def allowed_wording(claims) -> str:
+    """For a sentence citing all of `claims`: the wording the weakest of them allows."""
+    return WORDING[min((claim_cap(c) for c in claims), default=1)]
+
+
 # 'It increases X. [C1][C2] Next sentence': the model puts tags after the period; split naively they
 # would cite the NEXT sentence (pilot6: 8 of 13 entailment issues were judged against the wrong claims)
 TRAILING_TAGS = re.compile(r"([.!?]\**)((?:\s*\[(?:C\d+_\d+|NO_EVIDENCE)\])+)")

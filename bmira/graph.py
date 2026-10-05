@@ -19,7 +19,7 @@ from langgraph.types import Send, interrupt
 from bmira import portfolio as pf
 from bmira import shadow
 from bmira.config import Settings
-from bmira.evidence import grade_claim, is_proposal, prose_sentences, verify_text
+from bmira.evidence import WORDING, allowed_wording, claim_cap, grade_claim, is_proposal, prose_sentences, verify_text
 from bmira.llm import PROMPTS, spent_usd
 from bmira.evidence import claim_study_type, verify_methods
 from bmira.normalize import (EntityResolver, _mentioned, _previous_sentence, abbreviations, check_claim,
@@ -718,26 +718,41 @@ def synthesize(state, rt):
             + links[k].contradicting_ids + list(links[k].uncounted)}
     used |= {i for m in mediation.values() for i in m.support_ids + m.against_ids + list(m.uncounted)}
     claims = [c for c in (_as(Claim, x) for x in state["claims"]) if c.id in used]
+    by_id = {c.id: c for c in claims}
     conflicts = [_as(Conflict, c) for c in state.get("conflicts", [])]
     warnings = run_warnings(state, rt)
+
+    def strongest(ln):                          # RP-1: the best single citation for this step
+        return WORDING[max((claim_cap(by_id[i]) for i in ln.support_ids if i in by_id), default=1)]
     user = (f"Question: {state['question']}\nGate: {state.get('gate')} | semantic: "
             f"{state.get('semantic_status')} | warnings: {warnings or 'none'}\n\nPathways:\n" +
             "\n".join(f"[{h.id}] {h.name} | {pf.ROUTE_LABEL[h.status]} ({h.reason}) | score={h.score}"
                       f" | flags={[pf.FLAG_LABEL[f] for f in h.logic_flags]}\n"
                       + "".join(f"  {line}\n" for line in _blocking_lines(h, links, mediation)) +
+                      f"  may say: {_route_wording(h)}\n" +
                       "\n".join(f"  [{tags[k]}] {links[k].subject_label} --{links[k].relation}--> "
                                 f"{links[k].object_label} | {pf.STATUS_LABEL[links[k].status]} "
                                 f"({links[k].reason}) | grade={links[k].grade} | support="
                                 f"{links[k].support_ids} contra={links[k].contradicting_ids} "
-                                f"not counted={links[k].uncounted}"
+                                f"not counted={links[k].uncounted} | strongest wording: {strongest(links[k])}"
                                 for k in h.links) for h in hyps) +
             "\n\nConflicts:\n" + ("\n".join(f"- {c.verdict}: {c.explanation}" for c in conflicts) or "none") +
-            "\n\nClaim ledger:\n" + "\n".join(
+            "\n\nClaim ledger (a sentence never exceeds the wording of the weakest claim it cites):\n" + "\n".join(
                 f"[{c.id}] ({c.grade}) {c.subject_label} {c.relation_norm} {c.object_label} | "
-                f"{c.study_type} | {c.context_cell_type}" for c in claims))
+                f"{c.study_type} | {c.context_cell_type} | may say: {allowed_wording([c])}" for c in claims))
     text = rt.llm.text("synthesize", PROMPTS["synthesize"], user,
                        ctx={"hypotheses": hyps, "links": links, "tags": tags, "claims": claims})
     return {"synthesis": text, "link_tags": tags, "warnings": warnings}
+
+
+def _route_wording(h) -> str:
+    """RP-1: what a sentence about the whole route may say."""
+    if h.status == "demonstrated":
+        return ("the intermediate is required for the exposure's effect, in the tested system, citing the "
+                "blocking-test claims; each step as its own claims allow")
+    if h.status in {"assembled", "supported"}:
+        return "each step as its claims allow; never that the whole pathway was tested in one system"
+    return "do not state this pathway as established; describe what is missing"
 
 
 def _entailment(text, claims, rt):

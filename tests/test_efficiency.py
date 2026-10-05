@@ -95,3 +95,19 @@ def test_a_zero_budget_from_the_command_line_stops_after_one_round(tmp_path):
     assert session["session"]["budget_usd"] == 0.0
     run = session["runs"][0]
     assert run["run"]["rounds"] == 1 and any("unpriced" in w or "without a price" in w for w in run["warnings"])
+
+
+# ── RP-1: allowed wording, computed before writing ──────────────────────────
+def test_the_writer_is_told_the_wording_each_citation_allows():
+    from bmira.evidence import WORDING
+    rt, sc = offline_runtime()
+    seen, real = [], rt.llm.text
+    rt.llm.text = lambda task, system, user, **k: seen.append((task, system, user)) or real(task, system, user, **k)
+    final, _ = execute(sc["question"], rt, echo=False)
+    _, system, user = next(x for x in seen if x[0] == "synthesize")
+    assert "may say" in system and "Shown by a blocking experiment" in system
+    weak = next(c for c in final["claims"] if c.grade == "weak" and f"[{c.id}]" in user)
+    assert f"[{weak.id}]" in user and WORDING[1] in user.split(f"[{weak.id}]")[1].split("\n")[0]
+    assert "required for the exposure's effect, in the tested system" in user        # the shown redox route
+    assert "do not state this pathway as established" in user                         # the insufficient ones
+    assert "strongest wording: " + WORDING[3] in user

@@ -155,12 +155,14 @@ PROMPTS = {
         "Shown by a blocking experiment, Assembled from separate studies, Mediator not required, Supported "
         "(direct routes only), Contradicted, Insufficient evidence. Never call an assembled pathway "
         "supported or shown.\n"
+        "7. Run status and warnings are appended to the report by code. Do not restate them, but "
+        "never describe evidence as complete or concordant when a warning says otherwise.\n"
         "8. Open with the direct effect of the exposure on the outcome and its verdict. A pathway shown by "
         "a blocking experiment cites its blocking-test claims and says 'required for, in the tested "
         "system'. For an assembled pathway say that no study tested whether blocking its intermediate "
         "removes the effect, and name that experiment.\n"
-        "7. Run status and warnings are appended to the report by code. Do not restate them, but "
-        "never describe evidence as complete or concordant when a warning says otherwise.\n"
+        "9. Every claim, step and pathway below lists the strongest wording it allows ('may say'). A "
+        "sentence never exceeds the allowed wording of the weakest claim it cites.\n"
         "Structure: summary of the leading pathway(s) and how rivals compare; each pathway with its links; "
         "conflicts with discriminating experiments; gaps framed as missing experiments."),
     "chat": (
