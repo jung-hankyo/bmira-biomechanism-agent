@@ -203,6 +203,7 @@ def summarize(final: dict, rt, run: dict) -> dict:
     qlog, verif = final.get("search_log", []), final.get("verification", {})
     extracted = set(final.get("extracted_pmids", []))
     included = [p for p in papers if p.screen_status == "included"]
+    primary = [p for p in included if p.study_type != "review"]         # TE-1: reviews are never extracted
     read = [p for p in papers if p.pmid in extracted]
     tasks = sorted(set(llm.calls) | set(getattr(llm, "failures", {})))
     concept_ids = {i for c in claims for i in (c.subject_concept, c.object_concept)}
@@ -283,7 +284,8 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "excluded": sum(p.screen_status == "excluded" for p in papers),
             "retracted_excluded": sum(p.retracted for p in papers),
             "inclusion_rate": _share(len(included), sum(p.screen_status != "unscreened" for p in papers)),
-            "extracted": len(read), "included_never_extracted": len([p for p in included if p.pmid not in extracted]),
+            "extracted": len(read), "included_never_extracted": len([p for p in primary if p.pmid not in extracted]),
+            "reviews_not_extracted": len([p for p in included if p.study_type == "review" and p.pmid not in extracted]),
             "full_text_share_of_extracted": _share(sum(p.text_access == "full_text" for p in read), len(read)),
             # what extraction read: re-reads re-send the whole paper; full text is ~30x an abstract
             "extraction_reads": sum(p.n_reads for p in read),
@@ -294,7 +296,7 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "reviews_extracted": sum(p.study_type == "review" for p in read),
             "study_types": _count(p.study_type for p in included),
             "retrieved_for_a_step": sum(bool(p.retrieved_for) for p in papers),
-            "unread_for_their_step": sum(bool(set(p.retrieved_for) - set(p.read_for)) for p in included),
+            "unread_for_their_step": sum(bool(set(p.retrieved_for) - set(p.read_for)) for p in primary),
             "years": _count(p.year[:3] + "0s" for p in included if p.year)},
         "extraction": {
             "claims_extracted": n_extracted, "claims_kept": len(claims), "claims_dropped": len(dropped),
@@ -466,7 +468,8 @@ RULES = [
      "normalize.entity_of (attribute, tissue, modifiers), alias merging, extract prompt rule 3"),
     ("no alias merges", lambda m: (m["normalization"]["alias_merges"], m["extraction"]["claims_kept"]),
      lambda v: v[0] == 0 and v[1] >= 30, "0 merges with >= 30 claims", "normalize._maybe_alias prefilter"),
-    ("reading backlog", lambda m: _share(m["papers"]["included_never_extracted"], m["papers"]["included"]),
+    ("reading backlog", lambda m: _share(m["papers"]["included_never_extracted"],
+                                         m["papers"]["included"] - m["papers"].get("reviews_not_extracted", 0)),
      lambda v: v is not None and v > 0.30, "> 0.30 of included papers", "config.max_extract_per_round"),
     ("mostly abstracts", lambda m: m["papers"]["full_text_share_of_extracted"],
      lambda v: v is not None and v < 0.20, "< 0.20 full text", "grades are capped at moderate; expected for paywalled fields"),

@@ -54,9 +54,10 @@ def test_run_applies_evidence_rules(offline):
     assert dropped["S018"] == "null claim but the quote reports an effect"
     nad = next(ln for ln in final["links"].values()
                if ln.subject_label == "Lactate" and ln.object_label == "NAD+" and ln.relation == "decreases")
-    assert nad.n_studies == 2 and any("review" in r for r in nad.uncounted.values())
-    for p in final["papers"]:                                  # R7: every targeted hit was read for its step
-        if p.screen_status == "included":
+    assert nad.n_studies == 2 and not nad.uncounted            # TE-1: the review (S019) is never extracted
+    assert "S019" not in final["extracted_pmids"] and not any(c.pmid == "S019" for c in final["claims"])
+    for p in final["papers"]:                                  # R7: every targeted primary hit was read for its step
+        if p.screen_status == "included" and p.study_type != "review":
             assert set(p.retrieved_for) <= set(p.read_for)
 
 

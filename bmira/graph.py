@@ -257,6 +257,12 @@ def screen(state, rt):
     return {"papers": todo, "judge_log": log}
 
 
+def _readable(p) -> bool:
+    """Included and primary. TE-1: a review's claims never count (R1), so it is not extracted; its abstract
+    goes to pathway seeding instead (pilot4 extracted 8 reviews for 28 uncounted claims)."""
+    return p.screen_status == "included" and p.study_type != "review"
+
+
 def fan_out(state, rt):
     """Papers retrieved for a step are read FOR that step first (even if read before);
     then unread papers by relevance. Previously a targeted round could 'search' a step
@@ -265,7 +271,7 @@ def fan_out(state, rt):
     links = {k: _as(LinkEvidence, v) for k, v in state.get("links", {}).items()}
     claims = [_as(Claim, c) for c in state.get("claims", [])] + \
              [_as(Claim, c) for c in state.get("dropped_claims", [])]
-    pool = sorted((p for p in (_as(Paper, x) for x in state["papers"]) if p.screen_status == "included"),
+    pool = sorted((p for p in (_as(Paper, x) for x in state["papers"]) if _readable(p)),
                   key=lambda p: (-p.relevance_score, p.pmid))
     pending = lambda p: [k for k in p.retrieved_for if k not in p.read_for]
     todo = [p for p in pool if pending(p)] + [p for p in pool if p.pmid not in done and not pending(p)]
@@ -496,6 +502,14 @@ def _claims_summary(claims, n=120):
                      f"({c.grade}, {c.study_type}, {c.context_cell_type})" for c in claims[:n])
 
 
+def _review_digest(papers, n=20, chars=600) -> str:
+    """TE-1: included reviews, read by title and abstract only, as background for proposing pathways."""
+    reviews = sorted((p for p in papers if p.screen_status == "included" and p.study_type == "review"),
+                     key=lambda p: (-p.relevance_score, p.pmid))[:n]
+    return ("\nReviews (background for proposing pathways; they count as no evidence):\n" + "\n".join(
+        f"- {p.title}: {p.abstract[:chars]}" for p in reviews)) if reviews else ""
+
+
 def _add(hyps, keys, origin, name, rationale, diverse):
     if keys and not pf.is_duplicate(keys, hyps, diverse):
         n = max((int(h.id[1:]) for h in hyps), default=0) + 1     # ids never reused after drops
@@ -524,8 +538,7 @@ def portfolio(state, rt):
         st = state.get("target_searches", {}).get(k, {})
         clean = (state.get("search_status") != "SEARCH_FAILED" and st.get("ok", 0) >= 2
                  and st.get("clean", 0) >= 1)
-        unread = any(k in p.retrieved_for and k not in p.read_for and p.screen_status == "included"
-                     for p in papers)
+        unread = any(k in p.retrieved_for and k not in p.read_for and _readable(p) for p in papers)
         s_id, _, o_id = pf.split_key(ck)
         found = any(c.round == this_round and (c.subject_concept, c.object_concept) == (s_id, o_id)
                     for c in claims)
@@ -550,7 +563,7 @@ def portfolio(state, rt):
                 f"Question: {state['question']}\nHypothesis: {p.mechanism_hypothesis}\n"
                 f"Exposure: {p.exposure}" + (" (the question concerns a DECREASE of it: write every link as the "
                                            "effect of an INCREASE of its source)" if p.exposure_change == "down" else "")
-                + f"\nOutcome: {p.outcome}\nClaims:\n{_claims_summary(claims)}",
+                + f"\nOutcome: {p.outcome}\nClaims:\n{_claims_summary(claims)}" + _review_digest(papers),
                 ctx={"parsed": p, "claims": claims})
             for pw in out.pathways[:s.n_seed_hypotheses]:
                 keys, lab = pf.proposal_keys(pw, r, outcomes)
@@ -673,10 +686,14 @@ def run_warnings(state, rt) -> list[str]:
     if pending:
         w.append(f"{pending} claim relations could not be resolved and were excluded from support.")
     done = set(state.get("extracted_pmids", []))
-    waiting = [p for p in state.get("papers", []) if _as(Paper, p).screen_status == "included"
-               and _as(Paper, p).pmid not in done]
+    papers = [_as(Paper, p) for p in state.get("papers", [])]
+    waiting = [p for p in papers if _readable(p) and p.pmid not in done]
     if waiting:
         w.append(f"{len(waiting)} included papers were never extracted (per-round budget).")
+    reviews = [p for p in papers if p.screen_status == "included" and p.study_type == "review" and p.pmid not in done]
+    if reviews:
+        w.append(f"{len(reviews)} included reviews were not extracted (they count as no evidence); their "
+                 "abstracts informed pathway proposals only.")
     return w
 
 
