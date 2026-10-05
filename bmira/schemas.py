@@ -83,6 +83,8 @@ class Paper(BaseModel):
     study_type: Optional[STUDY_TYPES] = None
     retrieved_for: list[str] = Field(default_factory=list)   # steps whose searches returned it
     read_for: list[str] = Field(default_factory=list)        # steps it was extracted for
+    n_reads: int = 0                                          # extraction calls on this paper (re-reads included)
+    chars_read: int = 0                                       # characters sent to extraction, over all reads
 
 
 class Screen(BaseModel):

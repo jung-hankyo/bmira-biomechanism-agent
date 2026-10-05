@@ -34,6 +34,7 @@ version = { attr = "bmira.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]                       # tests import tools/ as a package
 
 [tool.coverage.run]
 source = ["bmira"]

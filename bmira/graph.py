@@ -285,12 +285,13 @@ def extract(payload, rt):
     paper = rt.source.fulltext(payload["paper"])
     s = rt.settings
     focus = "".join(f"\n- {t.subject_label} --{t.relation}--> {t.object_label}" for t in payload["focus"])
+    text = paper.source_text[:s.fulltext_char_limit + 2000]
     try:
         out = rt.llm.structured(
             "extract", ClaimList, PROMPTS["extract"].format(max_claims=s.max_claims_per_paper),
             f"Question: {payload['question']}\n" + (f"Focus steps (report any finding on them, "
                                                     f"including null or opposite):{focus}\n" if focus else "")
-            + f"\nPaper (PMID {paper.pmid}, {paper.text_access}):\n{paper.source_text[:s.fulltext_char_limit + 2000]}",
+            + f"\nPaper (PMID {paper.pmid}, {paper.text_access}):\n{text}",
             ctx={"paper": paper, "focus": payload["focus"]})
     except Exception as e:
         print(f"[extract] PMID {paper.pmid} failed ({type(e).__name__}); retried next round")
@@ -318,7 +319,8 @@ def extract(payload, rt):
           + (f" ({', '.join(c.drop_reason for c in dropped)})" if dropped else "")
           + (f"; read for {len(payload['focus_keys'])} step(s)" if payload["focus_keys"] else ""))
     return {"claims": kept, "dropped_claims": dropped, "extracted_pmids": [paper.pmid],
-            "papers": [paper.model_copy(update={"read_for": reads})]}
+            "papers": [paper.model_copy(update={"read_for": reads, "n_reads": paper.n_reads + 1,
+                                                "chars_read": paper.chars_read + len(text)})]}
 
 
 def _surfaces(c) -> tuple[str, str]:

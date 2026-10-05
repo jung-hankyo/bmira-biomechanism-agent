@@ -274,6 +274,13 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "inclusion_rate": _share(len(included), sum(p.screen_status != "unscreened" for p in papers)),
             "extracted": len(read), "included_never_extracted": len([p for p in included if p.pmid not in extracted]),
             "full_text_share_of_extracted": _share(sum(p.text_access == "full_text" for p in read), len(read)),
+            # what extraction read: re-reads re-send the whole paper; full text is ~30x an abstract
+            "extraction_reads": sum(p.n_reads for p in read),
+            "re_reads": sum(max(0, p.n_reads - 1) for p in read),
+            "chars_per_read": {acc: round(sum(p.chars_read for p in ps) / max(1, sum(p.n_reads for p in ps)))
+                               for acc in ("full_text", "abstract_only")
+                               if (ps := [p for p in read if p.text_access == acc])},
+            "reviews_extracted": sum(p.study_type == "review" for p in read),
             "study_types": _count(p.study_type for p in included),
             "retrieved_for_a_step": sum(bool(p.retrieved_for) for p in papers),
             "unread_for_their_step": sum(bool(set(p.retrieved_for) - set(p.read_for)) for p in included),
