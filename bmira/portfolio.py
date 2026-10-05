@@ -443,7 +443,7 @@ def evaluate(hyps, links, categories, expected, settings, mediation=None, ancest
         coherent = all(contexts_compatible(a.contexts, b.contexts, ancestors) for a, b in zip(ls, ls[1:]))
         if bad:
             h.status, h.reason = "contradicted", f"{step(bad)}: {bad.reason}"
-        elif is_direct(h):
+        elif is_direct(h) or len(nodes(h.links)) <= 2:       # no intermediate: nothing to block or assemble
             h.status, h.reason = ("supported", "every step has independent support") if all_supported else \
                 ("insufficient", f"{step(ls[0])}: {ls[0].reason}")
         elif shown:

@@ -237,3 +237,32 @@ def test_follow_up_context_carries_the_blocking_tests(offline):
     _, final = offline
     ctx = run_context(final)
     assert "blocking Glycolytic flux on CD8 T cell effector function: shown" in ctx and "[CS020_0]" in ctx
+
+
+def test_a_one_link_route_proposed_by_the_model_keeps_step_verdicts():
+    h, links = _route("supported", origin="llm_seed")
+    assert _verdict(h, links) == ("supported", "every step has independent support")
+
+
+def test_states_saved_before_v3_still_replay(tmp_path):
+    """Pilot states predate mediation, judge_log, blocking fields and read counters; a replay must work."""
+    import json
+    from helpers import run_session
+    run_session(tmp_path, "only question\n")
+    path = tmp_path / "s_q1.state.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    st = data["state"]
+    for k in ("mediation", "judge_log"):
+        st.pop(k, None)
+    for c in st["claims"] + st["dropped_claims"]:
+        for f in ("effect_exposure", "effect_result", "effect_exposure_concept", "effect_exposure_label"):
+            c.pop(f, None)
+    for p in st["papers"]:
+        p.pop("n_reads", None), p.pop("chars_read", None)
+    for h in st["hypotheses"]:
+        h["status"] = "supported" if h["status"] in {"demonstrated", "assembled"} else h["status"]   # v2 vocabulary
+    path.write_text(json.dumps(data), encoding="utf-8")
+    session = run_session(tmp_path, "only question\n", "--replay", str(path), out="r.json")
+    run = session["runs"][0]
+    assert run["status"] == "completed" and run["verification"]["passed"]
+    assert run["pathways"]["ranked"][0]["verdict"] == "Assembled from separate studies"   # no blocking test left
