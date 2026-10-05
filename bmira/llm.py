@@ -172,6 +172,11 @@ PROMPTS = {
         "strength never exceeds the weakest cited grade (weak -> association language). If the "
         "context does not answer the question, say so plainly and suggest starting a new "
         "investigation with '/new <question>'. Be concise."),
+    "repair": (
+        "Rewrite each numbered sentence so its wording does not exceed the allowed wording given for it. "
+        "Keep every bracketed tag ([C...], [L...], [H...], [NO_EVIDENCE]) exactly as written, change only "
+        "the verbs and qualifiers the allowed wording requires, and add no new claims. Return one rewrite "
+        "per sentence with `n` set to the number n of '[SENTENCE n]'."),
     "entailment": (
         "For each numbered sentence decide whether the CITED claims entail it: entailed, "
         "partial (supports part, or joins claims into a stronger proposition), unsupported."),

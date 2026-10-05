@@ -111,3 +111,78 @@ def test_the_writer_is_told_the_wording_each_citation_allows():
     assert "required for the exposure's effect, in the tested system" in user        # the shown redox route
     assert "do not state this pathway as established" in user                         # the insufficient ones
     assert "strongest wording: " + WORDING[3] in user
+
+
+# ── RP-2: one repair pass ───────────────────────────────────────────────────
+def _with_overclaim(extra_llm=None, **settings):
+    """A finished offline run whose report gains one overclaim on a weak claim; verify runs again."""
+    from bmira.graph import verify
+    rt, sc = offline_runtime(**settings)
+    final, _ = execute(sc["question"], rt, echo=False)
+    weak = next(c for c in final["claims"] if c.grade == "weak" and c.id in final["synthesis"])
+    bad = f"Lactate drives the loss of CD8 T cell effector function [{weak.id}]."
+    state = {**final, "synthesis": final["synthesis"] + "\n\n" + bad}
+    if extra_llm:
+        rt.llm.structured = extra_llm(rt.llm.structured)
+    return verify(state, rt), bad, rt, weak
+
+
+def test_a_flagged_sentence_is_rewritten_to_its_allowed_wording():
+    out, bad, rt, weak = _with_overclaim()
+    v = out["verification"]
+    assert v["passed"] and v["repair"]["rewritten"] == 1 and v["repair"]["before"]["overclaims"] == 1
+    assert bad not in out["synthesis"] and bad not in out["report"]
+    assert f"associated with the reported outcome [{weak.id}]." in out["synthesis"]
+    assert "1 of 1 flagged sentences were rewritten" in out["report"] and rt.llm.calls["repair"] == 1
+
+
+def _scripted(rewrites):
+    from bmira.schemas import Rewrite, RewriteBatch
+
+    def wrap(real):
+        def structured(task, schema, system, user, *a, **k):
+            if task == "repair":
+                if isinstance(rewrites, Exception):
+                    raise rewrites
+                pairs = rewrites(user) if callable(rewrites) else rewrites
+                return RewriteBatch(rewrites=[Rewrite(n=n, sentence=s) for n, s in pairs])
+            return real(task, schema, system, user, *a, **k)
+        return structured
+    return wrap
+
+
+def test_a_rewrite_that_drops_or_adds_citations_is_rejected():
+    out, bad, _, _ = _with_overclaim(_scripted([(1, "Lactate is associated with lower effector function.")]))
+    v = out["verification"]
+    assert not v["passed"] and v["repair"]["rewritten"] == 0
+    assert v["repair"]["rejected"] == [{"sentence": bad, "why": "tags changed"}] and bad in out["report"]
+
+
+def test_stray_numbers_duplicates_and_failures_change_nothing():
+    import re
+
+    def answers(user):
+        tag = re.search(r"\[(C\w+)\]", user)[1]
+        return [(7, "x"), (0, "y"), (1, f"Lactate is associated with it [{tag}]."), (1, f"Lactate drives it [{tag}].")]
+    out, bad, _, _ = _with_overclaim(_scripted(answers))
+    assert out["verification"]["repair"]["rewritten"] == 1 and "Lactate is associated with it" in out["synthesis"]
+    out, bad, _, _ = _with_overclaim(_scripted(RuntimeError("model down")))
+    assert out["verification"]["repair"]["error"] == "RuntimeError" and bad in out["synthesis"]
+    assert not out["verification"]["passed"]
+
+
+def test_no_repair_call_without_a_flag_or_when_switched_off():
+    rt, sc = offline_runtime()
+    final, _ = execute(sc["question"], rt, echo=False)
+    assert final["verification"]["passed"] and "repair" not in final["verification"] and rt.llm.calls["repair"] == 0
+    out, bad, rt, _ = _with_overclaim(repair_pass=False)
+    assert rt.llm.calls["repair"] == 0 and bad in out["synthesis"] and not out["verification"]["passed"]
+
+
+def test_tags_after_the_period_are_found_in_the_text():
+    from bmira.graph import _replace_sentence
+    text = "- First finding is shown. [C12_0][C13_1] Then more text.\n"
+    old = "First finding is shown [C12_0][C13_1]."               # as prose_sentences returns it
+    assert _replace_sentence(text, old, "First finding is associated [C12_0][C13_1].") == \
+        "- First finding is associated [C12_0][C13_1]. Then more text.\n"
+    assert _replace_sentence(text, "Not in the text.", "x") is None

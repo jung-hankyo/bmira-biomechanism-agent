@@ -365,6 +365,7 @@ def summarize(final: dict, rt, run: dict) -> dict:
             "passed": verif.get("passed"), "uncited": len(verif.get("uncited", [])),
             "overclaims": len(verif.get("overclaims", [])), "unknown_ids": len(verif.get("unknown_ids", [])),
             "missing_tags": len(verif.get("missing_tags", [])), "entailment_issues": len(verif.get("entailment", [])),
+            "repair": {k: (len(x) if isinstance(x, list) else x) for k, x in (verif.get("repair") or {}).items()},
             "overclaim_samples": [o["sentence"][:200] for o in verif.get("overclaims", [])][:5],
             # pilot4 recorded 8 entailment issues and no way to read them
             "entailment_samples": [{"verdict": e.get("verdict"), "sentence": e.get("sentence", "")[:200],

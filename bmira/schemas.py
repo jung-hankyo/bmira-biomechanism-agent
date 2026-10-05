@@ -328,3 +328,12 @@ class SentenceEntailment(BaseModel):
 
 class EntailmentBatch(BaseModel):
     judgements: list[SentenceEntailment]
+
+
+class Rewrite(BaseModel):
+    n: int = Field(description="The number n of '[SENTENCE n]'")
+    sentence: str = Field(description="The rewritten sentence, every bracketed tag kept exactly")
+
+
+class RewriteBatch(BaseModel):
+    rewrites: list[Rewrite]

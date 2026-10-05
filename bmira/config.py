@@ -58,7 +58,10 @@ class Settings:
         "expand": "medium", "synthesize": "medium"})
     # Classification tasks run on the cheap model whatever the call site asks for.
     cheap_tasks: tuple = ("screen", "entity", "entities", "relation", "alias", "pair",
-                          "conflict", "entailment", "preflight")
+                          "conflict", "entailment", "preflight", "repair")
+    # RP-2: sentences the verifier flags (overclaims, unsupported) are sent once to the cheap model with
+    # their allowed wording, substituted if every citation tag is kept, and the report is verified again.
+    repair_pass: bool = True
     # Directory for caches reused across runs (entity resolutions); None = no disk cache.
     cache_dir: str | None = None
     # Soft token budget per run (input + output over all tasks), checked between rounds:

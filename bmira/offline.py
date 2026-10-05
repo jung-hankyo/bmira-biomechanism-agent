@@ -209,6 +209,14 @@ class SurrogateLLM:
         return "\n".join(lines)
 
 
+    def _repair(self, ctx):
+        """Every flagged sentence becomes an association, its bracketed tags kept in order."""
+        from bmira.schemas import Rewrite, RewriteBatch
+        return RewriteBatch(rewrites=[
+            Rewrite(n=n, sentence="These findings are associated with the reported outcome "
+                                  + " ".join(f"[{t}]" for t in re.findall(r"\[([A-Za-z0-9_\-]+)\]", s)) + ".")
+            for n, s, _ in ctx["items"]])
+
     def _chat(self, ctx):
         """Keyword lookup over the run: enough to exercise the chat path offline."""
         st, words = ctx["state"], {w for w in re.findall(r"[a-z0-9+]+", ctx["question"].lower()) if len(w) > 3}

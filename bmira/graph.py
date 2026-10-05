@@ -19,7 +19,8 @@ from langgraph.types import Send, interrupt
 from bmira import portfolio as pf
 from bmira import shadow
 from bmira.config import Settings
-from bmira.evidence import WORDING, allowed_wording, claim_cap, grade_claim, is_proposal, prose_sentences, verify_text
+from bmira.evidence import (TRAILING_TAGS, WORDING, allowed_wording, claim_cap, grade_claim, is_proposal,
+                            prose_sentences, verify_text)
 from bmira.llm import PROMPTS, spent_usd
 from bmira.evidence import claim_study_type, verify_methods
 from bmira.normalize import (EntityResolver, _mentioned, _previous_sentence, abbreviations, check_claim,
@@ -27,7 +28,7 @@ from bmira.normalize import (EntityResolver, _mentioned, _previous_sentence, abb
                              lexical_relation, lookup_key, split_change, with_mark)
 from bmira.schemas import (BLOCKING_RELATION, Claim, ClaimList, Conflict, DIRECTION, EntailmentBatch, Hypothesis,
                            LinkEvidence, Paper, ParsedQuestion, PathwayProposal, QueryPlan,
-                           RelationResolutionBatch, Screen, SearchQuery)
+                           RelationResolutionBatch, RewriteBatch, Screen, SearchQuery)
 from bmira.semantic import adjudicate, candidate_pairs, clusters, conflict_candidates, triage
 
 
@@ -778,6 +779,59 @@ def _entailment(text, claims, rt):
             for j in out.judgements if j.verdict != "entailed" and j.sentence_index < len(sents)]
 
 
+TAG = re.compile(r"\[([A-Za-z0-9_\-]+)\]")
+
+
+def _replace_sentence(text: str, old: str, new: str) -> str | None:
+    """`old` as prose_sentences returned it, replaced once in `text`; None if it cannot be located. The
+    splitter moves citation tags written after the period ('... T cells. [C1]') in front of it, so the
+    text is searched as written, then with the tags moved the same way."""
+    if old in text:
+        return text.replace(old, new, 1)
+    moved = TRAILING_TAGS.sub(lambda m: m[2] + m[1], text)
+    return moved.replace(old, new, 1) if old in moved else None
+
+
+def _repair(text, claims, v, rt):
+    """RP-2: one rewrite of each flagged sentence (overclaim or unsupported) to the wording its citations
+    allow. A rewrite is used only if it keeps exactly the sentence's bracketed tags. Returns (text, info)."""
+    bad = [o["sentence"] for o in v["overclaims"]] + [e["sentence"] for e in v["entailment"]
+                                                       if e.get("verdict") == "unsupported"]
+    bad = [s for s in dict.fromkeys(bad) if s]
+    if not bad:
+        return text, None
+    by_id = {c.id: c for c in claims}
+    items = []
+    for n, s in enumerate(bad, 1):
+        cited = [by_id[i] for i in TAG.findall(s) if i in by_id]
+        items.append((n, s, allowed_wording(cited) if cited else WORDING[1]))
+    user = "\n\n".join(f"[SENTENCE {n}] {s}\nAllowed wording: {w}" for n, s, w in items)
+    info = {"flagged": len(bad), "rewritten": 0, "rejected": []}
+    try:
+        out = rt.llm.structured("repair", RewriteBatch, PROMPTS["repair"], user, role="cheap",
+                                ctx={"items": items}, n_items=len(items))
+    except Exception as e:
+        print(f"[verify] repair failed ({type(e).__name__}); flagged sentences stay as written")
+        return text, {**info, "error": type(e).__name__}
+    done = set()
+    for r in out.rewrites:
+        if not 1 <= r.n <= len(items) or r.n in done:
+            continue
+        _, old, _ = items[r.n - 1]
+        new = " ".join(r.sentence.split())
+        why = ("tags changed" if sorted(TAG.findall(new)) != sorted(TAG.findall(old)) else
+               "empty" if not new else None)
+        replaced = None if why else _replace_sentence(text, old, new)
+        if replaced is None:
+            info["rejected"].append({"sentence": old[:200], "why": why or "sentence not found in the text"})
+            continue
+        text, done = replaced, done | {r.n}
+        info["rewritten"] += 1
+    print(f"[verify] repair: {info['rewritten']} of {len(bad)} flagged sentences rewritten"
+          + (f", {len(info['rejected'])} rejected" if info["rejected"] else ""))
+    return text, info
+
+
 def _entailment_verdicts(text, claims, issues) -> dict:
     """sentence -> today's entailment verdict, for every sentence the check judged ('entailed' unless flagged)."""
     if any(e["verdict"] == "check_unavailable" for e in issues):
@@ -818,11 +872,24 @@ def verify(state, rt):
     hyps = [_as(Hypothesis, h) for h in state["hypotheses"]]
     claims = [_as(Claim, c) for c in state["claims"]]
     tags = state["link_tags"]
-    v = verify_text(state["synthesis"], claims, [h.id for h in hyps] + list(tags.values()))
-    v["entailment"] = _entailment(state["synthesis"], claims, rt)
-    log = shadow.report(rt, state["synthesis"], claims, {o["sentence"] for o in v["overclaims"]},
-                        _entailment_verdicts(state["synthesis"], claims, v["entailment"]))
+    required = [h.id for h in hyps] + list(tags.values())
+    synthesis = state["synthesis"]
+    v = verify_text(synthesis, claims, required)
+    v["entailment"] = _entailment(synthesis, claims, rt)
+    repair = None
+    if rt.settings.repair_pass:
+        synthesis, repair = _repair(synthesis, claims, v, rt)
+        if repair and repair["rewritten"]:          # verified once more; whatever remains is reported
+            before = {"overclaims": len(v["overclaims"]),
+                      "unsupported": sum(e["verdict"] == "unsupported" for e in v["entailment"])}
+            v = verify_text(synthesis, claims, required)
+            v["entailment"] = _entailment(synthesis, claims, rt)
+            repair["before"] = before
     v["passed"] = v["passed"] and not any(e["verdict"] == "unsupported" for e in v["entailment"])
+    if repair:
+        v["repair"] = repair
+    log = shadow.report(rt, synthesis, claims, {o["sentence"] for o in v["overclaims"]},
+                        _entailment_verdicts(synthesis, claims, v["entailment"]))
     mediation = {k: _as(pf.MediationEvidence, v) for k, v in state.get("mediation", {}).items()}
     table = ["| Pathway | Verdict | Why | Score | Source | Logic warnings | Blocking test | Steps |",
              "|---|---|---|---|---|---|---|---|"]
@@ -841,10 +908,13 @@ def verify(state, rt):
             f"Outcome measured as: {', '.join([p.outcome] + p.outcome_readouts)}. "
             + (f"Question analysed as a decrease of {p.exposure}. " if p.exposure_change == "down" else "") +
             f"Population: {p.target_system}. Scores rank pathways; they are not probabilities.")
-    report = (state["synthesis"] + "\n\n---\n## Pathway portfolio (computed)\n" + stop + "\n\n"
+    report = (synthesis + "\n\n---\n## Pathway portfolio (computed)\n" + stop + "\n\n"
               + "\n".join(table)
               + "\n\n## Run-quality warnings\n" + ("\n".join(f"- {x}" for x in state["warnings"]) or "- none")
-              + "\n\n## Verification\n" + ("- PASS" if v["passed"] else "\n".join(
+              + "\n\n## Verification\n"
+              + (f"- {repair['rewritten']} of {repair['flagged']} flagged sentences were rewritten to their allowed "
+                 "wording and verified again\n" if repair and repair["rewritten"] else "")
+              + ("- PASS" if v["passed"] else "\n".join(
                   [f"- uncited: {s[:120]}" for s in v["uncited"][:5]] +
                   [f"- overclaim (tier {o['used']} > {o['allowed']}): {o['sentence'][:120]}" for o in v["overclaims"][:5]] +
                   [f"- unknown claim id: {i}" for i in v["unknown_ids"][:5]] +
@@ -853,7 +923,7 @@ def verify(state, rt):
     print(f"[verify] {'PASS' if v['passed'] else 'VIOLATIONS'}: uncited={len(v['uncited'])} "
           f"overclaims={len(v['overclaims'])} missing_tags={len(v['missing_tags'])} "
           f"entailment_issues={len(v['entailment'])}")
-    return {"verification": v, "report": report, "judge_log": log}
+    return {"verification": v, "report": report, "judge_log": log, "synthesis": synthesis}
 
 
 # ── assembly ────────────────────────────────────────────────────────────────
