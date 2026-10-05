@@ -97,3 +97,11 @@ def test_version_is_the_same_everywhere():
     cff = re.search(r"^version: (\S+)$", (ROOT / "CITATION.cff").read_text(encoding="utf-8"), flags=re.M).group(1)
     assert cff == bmira.__version__
     assert f"**v{bmira.__version__}**" in (ROOT / "README.md").read_text(encoding="utf-8")   # a versioning entry
+
+
+def test_no_new_q1_literals_in_the_package():
+    """EV-7: question-specific fixes do not generalize. 37 lines of bmira/*.py named butyrate or Treg at
+    v2.6.0; new fixes route a misreading to a judge or the gold set instead of adding literals."""
+    lines = [ln for f in sorted((ROOT / "bmira").glob("*.py"))
+             for ln in f.read_text(encoding="utf-8").splitlines() if re.search(r"butyrate|treg", ln, re.I)]
+    assert len(lines) <= 37, f"{len(lines)} lines name butyrate or Treg (limit 37)"
