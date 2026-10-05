@@ -22,6 +22,10 @@ CI (`.github/workflows/tests.yml`) runs `ruff check .` and `pytest` on Python 3.
 - `bmira/offline.py` runs the real graph with a scripted model (`SurrogateLLM`), the synthetic
   corpus `bmira/fixtures/lactate_cd8.json` and a hashing encoder. A new LLM task needs a
   `_<task>` method there, or offline runs fail.
+- v3 (handoff Phases 0-2): blocking tests and the mediation index (`portfolio.build_mediation`, route
+  tiers in `evaluate`); the decision model ("judge") in `judge.py`, `questions.py`, `shadow.py`, shadow
+  mode only, never acting until calibrated on gold labels; gold-set scoring in `eval.py`; measurement
+  tools in `tools/`. Fix ids: JV, EM, GR, TE, LC, RP, EV, HY.
 - `tests/` has one file per stage (`test_normalize.py` for `bmira/normalize.py`, and so on).
   `test_pipeline.py` runs whole graphs; `test_tools.py` covers `probe`, `ab_extract` and metadata.
   Shared stand-ins are in `tests/helpers.py` (`make_claim`, `parsed_question`, `StubLLM`,
@@ -35,6 +39,9 @@ CI (`.github/workflows/tests.yml`) runs `ruff check .` and `pytest` on Python 3.
 - A fix found in a live run gets a test named after the behaviour it guarantees, with the pilot
   and the observed numbers in its docstring. Commit messages carry the fix code (`N9:`, `P3:`).
 - Fixture papers are invented; never cite them as literature.
+- Do not add regex cue lists or lexicon entries to fix a semantic misreading: add the case to the gold
+  set and route it to the judge. Do not loosen an evidence rule without gold-set evidence.
+- `# ponytail:` marks a known, deliberate limitation and what would lift it.
 - A version bump touches `bmira/__init__.py`, `CITATION.cff` (version and date) and a README
   versioning entry; `tests/test_tools.py::test_version_is_the_same_everywhere` checks them.
 - Live runs (`python -m bmira.experiments` without `--offline`) spend money and need

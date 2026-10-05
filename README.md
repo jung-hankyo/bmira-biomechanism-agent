@@ -1,212 +1,125 @@
 # B-MiRA — Biomedical Mechanism Inference Research Agent
 
-**v2.6** · LangGraph · Python 3.10+
+**v2.6 + v3 development** · LangGraph · Python 3.10+
 
-Ask *"Does X affect Y, and through which mechanisms?"*, in any language and about a laboratory or a clinical question. B-MiRA searches PubMed, extracts claims from papers, grades the evidence, and weighs **several candidate pathways against each other** before writing a report in which every sentence is tied to a cited claim.
+Ask *"Does X affect Y, and through which mechanisms?"*. B-MiRA searches PubMed, extracts and grades claims, weighs **competing pathways** against each other, and writes a report in which every sentence cites a claim and is checked against it.
 
 > Research tool for exploring literature. Not medical advice, and not a substitute for reading the papers.
 
----
-
-## Why it is built this way
-
-| Common failure of literature agents | What B-MiRA does instead |
-|---|---|
-| Commits to the first mechanism it imagines | Keeps a **portfolio** of competing pathways and spends search effort on the ones that could change the ranking |
-| Re-invents the hypothesis every round, so results drift | Each pathway step has a stable identity, so evidence **accumulates** across rounds |
-| Overstates weak evidence | Every claim is **graded** on what its text actually shows; report wording is **checked** against the grade of the claims it cites |
-| Trusts the model's reading of a paper | Each claim's quote must exist in the paper, name both entities and match the claim's direction; method details count only if the text shows them |
-| Hides gaps and failures | Gaps, contradictions and degraded runs are **stated in the report** |
-
 ## How it works
 
-<p align="center"><img src="docs/figure1.svg" alt="B-MiRA architecture in three panels: a, retrieve papers; b, build the evidence graph; c, weigh competing pathways, with a loop back to targeted search until the stop rule fires" width="100%"></p>
+<p align="center"><img src="docs/figure1.svg" alt="B-MiRA architecture: retrieve papers; build the evidence graph; weigh competing pathways, looping back to targeted search until the stop rule fires" width="100%"></p>
 
-**Figure 1 | B-MiRA architecture.** **a**, A question is parsed into search queries; PubMed and Europe PMC are searched and papers are screened. **b**, Claims are extracted and checked against their quotes, normalized to ontology concepts, graded per claim, and compared into a shared evidence graph. **c**, Candidate pathways from three sources compete: each is scored by its weakest step and given a verdict, and the next searches go to the steps that would most change the ranking. The loop repeats until the stop rule fires; a report is then written and every sentence is verified. Hexagons are LLM calls, rectangles are deterministic code. A 2× PNG for slides and papers is in [`docs/figure1.png`](docs/figure1.png).
+**Figure 1.** **a**, The question is parsed (exposure, outcome, readouts, direction, class members) and searched; papers are screened. **b**, Claims are extracted, checked against their quotes, normalized to ontology concepts, graded, and joined into one evidence graph. **c**, Pathways from LLM proposals, the literature graph and gated expansion compete; the next searches go to the steps that would most change the ranking. Hexagons are LLM calls, rectangles code.
 
-**The evidence graph.** Every claim like *"lactate lowers NAD⁺ levels in CD8 T cells"* becomes an edge between two entities (*lactate → NAD⁺*). How the entity was measured (*levels*, *expression*, *differentiation*) and where (*colon*, *bone marrow*) are qualifiers on the claim, not part of the node: "induction of colonic regulatory T cells", "Treg differentiation" and "bone marrow Treg cells" all meet at *regulatory T cell*. Lists such as "NFAT1 and SMAD3" become one claim per entity; ontology terms prefer species-agnostic entries, then human, mouse, rat. Supporting, corroborating and opposing papers attach to the same edge, so a step's evidence is shared by every pathway that uses it.
-
-**The question.** The question is parsed into exposure, outcome, comparator, population and an expected direction, in English whatever language it was asked in. A decline or loss in the question (*"NAD⁺ decline"*, *"TET2 loss"*) is read as a decrease of the bare entity. A class exposure (*"SGLT2 inhibitors"*) is given its members (*empagliflozin, dapagliflozin*), which share the exposure node because papers name the members. A question the literature cannot answer as exposure → outcome (chit-chat, a personal treatment decision) stops before any search, and the reply says why.
-
-**The pathway portfolio.** Candidate pathways come from three places:
-1. **LLM proposals**: once, after the first search round, the model proposes a few pathways that must differ in their intermediate steps.
-2. **The literature graph**: code finds exposure → outcome routes that the evidence already connects, even if no one proposed them.
-3. **Gated expansion**: when a Supported step brings in an intermediate no pathway uses, the model may add at most one pathway through it, as one connected chain.
-
-A one-step exposure → outcome route found in the literature answers *"does X affect Y"*; it is listed but takes no pathway slot, and there is one per outcome or readout. Proposed pathways stop at the first readout of the outcome.
-
-**Scoring.** A pathway is only as strong as its weakest step. Biological logic checks (sign consistency, connectivity, cell-type coherence) lower the score of implausible pathways. Routes whose weakest step has no evidence yet all score 0; they are ordered by how many of their steps are already supported. Scores **rank** pathways; they are not probabilities.
+- **Evidence graph.** A claim is an edge between two entities; how and where it was measured are qualifiers, so "Treg differentiation" and "colonic regulatory T cells" meet at *regulatory T cell*. Evidence on a step is shared by every pathway that uses it.
+- **Blocking tests (v3).** An experiment that removes or blocks an intermediate M (knockout, knockdown, inhibitor) and reports whether the exposure's effect on the outcome persisted keeps the exposure. These tests form a mediation index, separate from the step edges.
+- **Decisions in code.** Counting, grades, verdicts, scores, search allocation, budgets and stop rules are deterministic. LLMs parse, write queries, extract, propose pathways and write prose.
 
 ### Verdicts
 
-Every step and every pathway gets one of three verdicts, each with a one-line reason:
+| Level | Verdict | Meaning |
+|---|---|---|
+| Step | **Supported** | ≥ 2 independent primary papers, one at moderate grade or better, opposing papers under half |
+| Step | **Contradicted** | Counted opposing papers at least half, at moderate or better |
+| Step | **Insufficient evidence** | Anything else, with the reason (*"1 of 2 required papers"*, *"no study found in 2 targeted searches"*) |
+| Pathway | **Shown by a blocking experiment** | Blocking an intermediate removed the effect (moderate or better), and every other intermediate is blocked or has both its steps supported |
+| Pathway | **Assembled from separate studies** | Every step Supported, cell-type contexts compatible; no blocking test |
+| Pathway | **Mediator not required** | Removing the intermediate left the effect, and nothing better holds |
+| Pathway | **Contradicted / Insufficient evidence** | A step is contradicted / anything else |
 
-| Verdict | Meaning |
-|---|---|
-| **Supported** | Every step has ≥ 2 independent primary papers, at least one of moderate grade or better, and opposing papers are fewer than half |
-| **Contradicted** | Counted opposing papers make up at least half, at moderate grade or better |
-| **Insufficient evidence** | Anything else, e.g. *"1 of 2 required papers"*, *"only weak evidence"* or *"no study found in 2 targeted searches"* |
+A direct exposure → outcome route keeps the step verdicts and heads the report. Scores **rank** pathways; they are not probabilities.
 
-"No study found in 2 targeted searches" is worth noticing: it often marks an untested hypothesis rather than a wrong one. It is only stated after two clean searches whose hits were all read for that step.
+### Evidence rules (code, not the model)
 
-### Evidence rules
-
-Fixed rules, applied by code rather than by the model, decide what counts:
-
-| Rule | What it prevents |
-|---|---|
-| A claim's quote must appear in the paper, name both entities, and agree with the claim's direction (a "no" or "did not" cannot be added or dropped) | Misread or invented findings |
-| Perturbation, rescue, validation and control details count only if the quote or a quoted methods sentence shows them | Inflated grades |
-| A finding in a knockout or deficiency (*"mice lacking GPR109A had fewer CD103⁺ DCs"*) is restated as the normal role of the lost entity (*GPR109A increases CD103⁺ DCs*), once, and only if the quote shows the loss | Pathway steps with the wrong sign |
-| Each claim is graded by its own experimental system (one paper can hold mouse and human data) | Paper-level mislabelling |
-| Evidence from a system further from the question's population (e.g. mouse for a human question) is capped at moderate | Over-reliance on indirect models |
-| Reviews are shown but never count as independent papers | Double-counting the same finding |
-| A null result counts against a step only if it had a control and is at least as strong as the support | Underpowered nulls erasing real effects |
-| An opposing finding is set aside as "different context" only if the recorded contexts really differ and it does not come from a system closer to humans | Explaining away contradictions |
-| Papers found for a step are read for that step before it can be called unfound | False "no study found" |
-| Report sentences are checked against the weakest claim they cite; statements of absence (*"a test of this step is missing [NO_EVIDENCE]"*) and proposed experiments are not read as findings | Overstated reports, and false alarms about them |
+- A quote must exist in the paper, name both entities and match the claim's direction; method details count only if the text shows them.
+- Each claim is graded by its own system; evidence further from the question's population is capped at moderate.
+- Reviews never count and are not extracted; their abstracts only inform pathway proposals.
+- A null result counts against a step only with a control and at least the support's grade; the same rule applies to blocking tests.
+- A finding on a subtype supports its parent, never refutes it.
+- Report wording is limited to what the weakest cited claim allows. The writer is told this limit before writing, flagged sentences get one repair pass, and the verifier checks the result.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/jung-hankyo/bmira-biomechanism-agent.git
-cd bmira-biomechanism-agent
-pip install -r requirements.txt
+git clone https://github.com/jung-hankyo/bmira-biomechanism-agent.git && cd bmira-biomechanism-agent
+pip install -r requirements.txt             # or, for development: pip install -e ".[dev,app]"
+python -m pytest -q                          # offline: no keys, no network
+streamlit run app.py                         # "Offline demo" in the sidebar, or Live with keys
+export OPENAI_API_KEY=... NCBI_EMAIL=you@example.org   # or ANTHROPIC_API_KEY; NCBI_API_KEY optional
 ```
 
-**1. Try it offline (no keys, no network).** A synthetic scenario and a scripted model exercise the whole pipeline:
+The chat app runs an investigation on the first message. It answers follow-ups only from that run's evidence, citing claim ids, and `/new <question>` starts over.
+
+## Experiments and measurement
 
 ```bash
-python -m pytest -q tests          # 102 tests, offline
-streamlit run app.py               # choose "Offline demo" in the sidebar
+python -m bmira.experiments [--only 1 2] [--max-rounds 3] [--budget-usd 2] [--budget-tokens N]
+python -m bmira.experiments --offline                      # wiring check
+python -m bmira.experiments --replay runs/S_q1.state.json  # re-judge a saved run with the current code
+python -m bmira.experiments --judge jev                    # decision model in shadow mode (TYPESAFE_API_KEY)
+python -m bmira.probe ["question"]                         # parse + round-1 queries + hit counts (~$0.03)
+python -m bmira.shadow runs/S_q1.state.json --out runs/shadow.jsonl   # every judge question over a saved run
+python -m tools.token_anatomy runs/session_X.json          # where tokens and dollars went
+python -m tools.mediation_census runs/*_q*.state.json      # blocking tests in saved runs
+python -m tools.sample_gold claims runs/*_q1.state.json    # label forms for the gold sets (eval/README.md)
+python -m bmira.eval --labels eval/claims_gold.jsonl --log runs/shadow.jsonl   # score executors on gold labels
 ```
 
-**For development,** `pip install -e ".[dev,app]"` installs the package with pytest, ruff and the app; `ruff check .` and `pytest` are what CI runs. CLAUDE.md lists the conventions.
+- **Before spending.** A preflight checks each model, PubMed, the ontology service and the judge (the judge is not required). Fatal errors, such as an empty balance or a bad or missing key, stop the session and are written to the session file.
+- **The session file.** Each session writes one file, `runs/session_<timestamp>.json` (git-ignored). It holds per-task tokens, cost and failures; retrieval, screening, extraction, normalization, grading, comparison, step, pathway and mediation tables; verification and repair; the judge's agreement with today's executor; and `signals` naming the code to inspect.
+- **Saved state.** Each run also saves `<session>_q<n>.state.json` for replay.
 
-**2. Run it live.** Choose *Live* in the app's sidebar and enter an OpenAI or Anthropic API key and your NCBI email. Or set them once:
-
-```bash
-export OPENAI_API_KEY=...           # or ANTHROPIC_API_KEY
-export NCBI_EMAIL=you@example.org   # NCBI asks for a contact address
-export NCBI_API_KEY=...             # optional, raises PubMed rate limits
-```
-
-### Using the chat app
-
-| You type | B-MiRA does |
-|---|---|
-| A mechanism question | Runs a full investigation and shows the ranked pathways, the report and the run log |
-| A question outside its scope | Says why it was not investigated, without searching or spending |
-| A follow-up (*"why is route 2 contradicted?"*) | Answers **only** from that run's evidence, citing claim IDs; flags any sentence that overstates the evidence |
-| `/new <question>` | Starts a fresh investigation |
-
-The report and the run state can be downloaded as Markdown and JSON.
-
-### Running experiments
-
-```bash
-python -m bmira.experiments                        # the 8 questions in experiments/questions.txt
-python -m bmira.experiments --only 1 2 --max-rounds 3
-python -m bmira.experiments --budget-tokens 2000000  # soft token cap per run
-python -m bmira.experiments --offline              # wiring check, no keys
-python -m bmira.experiments --replay runs/session_X_q1.state.json   # re-judge a saved run with the current code
-python -m bmira.probe                              # parse + round-1 queries + PubMed hit counts per question (~$0.03 each)
-python -m bmira.probe "Does exercise improve insulin sensitivity, and how?"
-```
-
-**Before a costly run on a new question,** `bmira.probe` shows what the agent made of it: scope, exposure and outcome as resolved concepts, class members, readouts, expected direction, and each round-1 query with its hit count. A zero-hit query or an unresolved exposure seen here would otherwise cost a whole run. **A replay** re-runs normalization, comparison, the portfolio, the report and verification on a saved run's claims, so a fix to those stages can be checked without searching or reading again; each live run leaves a `<session>_q<n>.state.json` for this.
-
-**Before spending,** a preflight (a few seconds) sends one tiny call to each configured model with the same parameters as real calls, one PubMed search and one ontology lookup; a required failure aborts the session (`--no-preflight` skips it). **During a run,** rate limits, overloads and timeouts are retried with backoff; fatal errors (empty balance, invalid key, unknown model, unsupported parameter) stop the session at once instead of degrading silently. **A run that stops early is still summarized** from its last completed step, with `status`, `error` and `failed_node`, so paid work is never lost.
-
-Each session writes **one** file, `runs/session_<timestamp>.json` (git-ignored), rewritten after every question. Per run it holds: LLM calls, tokens, latency and failures per task; queries and hits; screening and full-text rates; claims kept and dropped (with reasons and samples); uncredited method details; ontology resolution and synonym merges; grades and caps; claim comparisons and conflicts; step and pathway verdicts with reasons; leader per round; verification; warnings; the log tail; the report. Per LLM task it also records the model used, reasoning tokens and an estimated cost (from the price table in `config.py`). The session header records models, effort settings, budget, preflight results and whether the code had uncommitted edits. A `signals` list flags measured values that crossed a heuristic threshold, each naming the code to inspect. The chat app offers the same summary as a download.
+**Decision model ("judge").** TypeSafe Jev, pinned to `jev-1.13.0`, runs in **shadow** mode only. It answers typed questions (screening, quote stance, method fields, loss of function, relation, blocking tests, sentence strength, entailment) next to today's executor and changes nothing. A touchpoint will act only after its thresholds are calibrated on owner-labeled gold sets (`eval/`). Questions and thresholds live in `bmira/questions.py`.
 
 ## Repository layout
 
 ```
-app.py                    Streamlit chat interface
-experiments/questions.txt Eight experiment questions for live runs
-docs/figure1.svg          Architecture figure (also .png)
-bmira/
-  config.py               All tunable settings (one dataclass)
-  schemas.py              Data models and controlled vocabularies
-  llm.py                  Prompts and the LLM client
-  sources.py              PubMed and Europe PMC access
-  normalize.py            Entity resolution, synonyms, relation typing, quote checking
-  evidence.py             Claim grading and report verification
-  semantic.py             Which claims report the same finding; conflict triage
-  portfolio.py            Evidence graph, verdicts, scoring, search allocation
-  graph.py                The LangGraph pipeline and report
-  chat.py                 Follow-up answers grounded in a finished run
-  telemetry.py            Run metrics and revision signals
-  experiments.py          Batch runner: questions in, one session summary file out; --replay of saved runs
-  probe.py                Cheap check of how questions are parsed and searched, before a full run
-  ab_extract.py           A/B harness for extraction settings on stored papers
-  offline.py              Scripted model + synthetic corpus for key-free runs
-  fixtures/               Synthetic test scenario (invented papers)
-tests/                    Offline tests, one file per pipeline stage (helpers.py, conftest.py: shared)
-pyproject.toml            Package metadata, extras, pytest and ruff settings
-LICENSE  CITATION.cff     MIT license; citation metadata
+app.py                  Streamlit chat          bmira/graph.py        LangGraph pipeline and report
+bmira/config.py         All settings            bmira/portfolio.py    Links, mediation index, verdicts, search, stop
+bmira/schemas.py        Data models             bmira/evidence.py     Grading, allowed wording, report verifier
+bmira/llm.py            Prompts, LLM client     bmira/normalize.py    Entities, relations, quote checks
+bmira/sources.py        PubMed, Europe PMC      bmira/semantic.py     Same finding; conflict triage
+bmira/judge.py          Decision-model client   bmira/questions.py    Judge questions and thresholds
+bmira/shadow.py         Judge touchpoints       bmira/eval.py         Gold-set scoring
+bmira/telemetry.py      Session metrics         bmira/experiments.py  Batch runner, replay
+bmira/offline.py        Scripted model, corpus  bmira/fixtures/       Synthetic scenario (invented papers)
+tools/                  Token anatomy, mediation census, gold-set forms
+eval/                   Gold sets (owner-labeled) and how to make them
+tests/                  Offline tests, one file per stage    CLAUDE.md   Conventions for coding agents
 ```
 
-## Main settings
-
-All in `bmira/config.py`; the app exposes the round limit.
+## Main settings (`bmira/config.py`)
 
 | Setting | Default | Effect |
 |---|---|---|
-| `max_rounds` | 5 | Upper bound on search rounds |
-| `min_studies_per_link` | 2 | Independent papers needed for a step to be Supported |
-| `n_seed_hypotheses` / `max_hypotheses` | 4 / 6 | Pathways proposed at the start / kept at once |
-| `targets_per_round` / `exploration_slots` | 3 / 1 | Steps searched per round / slots reserved for non-leading pathways |
-| `max_extract_per_round` | 20 | Papers read per round; papers found for a step are read first, the rest wait |
-| `max_papers_per_target_query` | 5 | Hits per targeted query (the coverage round takes 20); reading capacity, not search, is the limit |
-| `min_relevance` | 50 | Screening score (0-100) a paper needs to be read; targeted hits are judged against their step |
-| `cheap_tasks` | 9 classification tasks | Tasks routed to the cheap model (screening, entities, relations, aliases, pairs, conflicts, entailment) |
-| `cache_dir` | `runs/cache` in live runs | Entity resolutions reused across runs |
-| `max_claims_per_paper` | 8 | Claims taken from one paper (null and opposing findings are prioritized) |
-| `temperature` | `None` | Sampling temperature; `None` uses each model's default (some reasoning models accept nothing else) |
-| `reasoning_effort` | low / medium per task | OpenAI reasoning effort: low for classification tasks, medium for reading papers, planning and the report |
-| `budget_tokens` | `None` | Soft token cap per run, checked between rounds; when reached, searching stops and the report is still written |
-| `prices` | official list prices | USD per 1M tokens per model, used only for cost estimates in telemetry; edit to your current prices |
-| `llm_max_retries` / `llm_timeout_s` | 6 / 180 s | Retries with backoff for transient LLM errors; per-call timeout |
+| `max_rounds` / `targets_per_round` | 5 / 3 | Search rounds; steps searched per round |
+| `min_studies_per_link` | 2 | Papers a step needs to be Supported |
+| `max_extract_per_round` / `max_claims_per_paper` | 20 / 8 | Papers read per round (step hits first); claims per paper |
+| `budget_usd` / `budget_tokens` | `None` | Soft caps checked between rounds; the report is still written |
+| `repair_pass` | `True` | One rewrite of flagged report sentences to their allowed wording |
+| `judge_provider` / `judge_mode` | `"off"` / `"shadow"` | Decision model; only shadow mode exists until calibration |
+| `prices` | list prices | USD per 1M tokens; unpriced models are named in the warnings |
+| `reasoning_effort`, `cheap_tasks`, `temperature` | per task | Effort per task (OpenAI), tasks on the cheap model, sampling |
 
 ## Limitations
 
-- **Live runs so far cover one question.** Pilots 3–7 all asked question 1 (butyrate and colonic Tregs); the other seven, including the clinical ones, have not run end to end. The offline tests prove the pipeline's logic, not extraction accuracy on real papers. Validation against an expert-annotated gold set is the next milestone.
-- **Mechanism routes rarely reach Supported.** In every pilot the direct exposure → outcome routes were Supported and no multi-step route was: most mechanism steps rest on one paper (pilot7: 156 of 187 steps), and papers report *exposure → intermediate* far more often than *intermediate → outcome*. Read "Insufficient evidence" on a mechanism route as "not yet shown here", not as "wrong".
-- Two reads of the same paper at the same settings change about 40% of the extracted claims, so single-run comparisons show only large effects.
-- Grade weights and thresholds are reasoned defaults, not calibrated values.
-- The relation vocabulary (11 relations) cannot express dose, timing or compositional effects; those stay in the claim's context fields.
-- Only open-access full texts are read; everything else is abstract-only, which caps the evidence grade. Full texts are read section by section (Results, figure legends, Methods first).
-- Cost estimates cover only models listed in `Settings.prices`; reasoning effort applies to OpenAI models only. The token budget is soft: the round in progress and the report can exceed it, so set a hard spend limit at the provider as well.
-- Rules are checked offline with invented papers. Ontology routing (OLS) and the quote checks have not yet been measured on real papers, so expect some valid claims to be dropped as too strict.
+- **Live runs cover one question.** Pilots 3-7 all asked Q1 (butyrate and colonic Tregs). No mechanism route reached Supported there; most steps rest on one paper.
+- **v3 is not yet validated live.** The blocking-test model, route tiers, repair pass and judge are tested offline on invented papers only. Pilot8 will be the first live run with them, and also the first test of the pilot7 fixes.
+- **Not yet built:** EM-6 (searching for blocking tests on purpose) and the gold labels (`eval/`). Without labels, no judge touchpoint can act.
+- Two reads of one paper change about 40% of the extracted claims, so single runs show only large effects. Grade weights and thresholds are reasoned defaults, not calibrated values.
+- Only open-access full texts are read; abstract-only evidence is capped at moderate.
 
 ## Versioning
 
-**v2.0.0** is the first public release. It consolidates the internal prototypes (single-notebook versions 5–12) into a tested package, replaces the single mechanism chain with the pathway portfolio, and adds the chat interface. It was published without a license file.
+- **v2.0.0** first public release; **v2.0.1** license, citation, figure; **v2.1.0** evidence-pipeline hardening; **v2.2.0** telemetry and batch runner; **v2.2.1** checkpoint type registration; **v2.2.2** no fixed temperature, explicit encodings; **v2.3.0** safe live runs (preflight, fatal abort, budgets, costs); **v2.4.0** and **v2.5.0** fixes from the first live runs (entity granularity, ontology, pair matching, loss restatement).
+- **v2.6.0** fixes from pilots 4-7: replay of saved runs, chemical, ontology and abbreviation rules, knockouts as *required for*, one direct route per outcome, numbered targets and verdicts, verifier false alarms, scope and class members in parsing, `bmira.probe`.
+- **Unreleased (v3, handoff Phases 0-2):**
+  - Blocking tests and the mediation index, route tiers, context coherence, a direct-effect headline.
+  - Reviews are not extracted; a USD budget; allowed wording before writing and one repair pass.
+  - The judge in shadow mode; the gold-set harness; the token anatomy and mediation census tools.
+  - A missing key is recorded in the session file.
 
-**v2.0.1** adds the MIT license, citation metadata and the architecture figure.
+## License and citing
 
-**v2.1.0** hardens the evidence pipeline: claims are checked against their quotes, method details need textual support, grades are per claim with an indirectness cap, reviews no longer count as independent, null results and context arguments face explicit rules, targeted searches are read for their step, entities are separated from how they were measured, and retrieval retries and reads full texts by section. Expect fewer Supported and fewer "no study found" verdicts than v2.0; both are corrections.
-
-**v2.2.0** adds run telemetry: token, latency and failure accounting per LLM task, a batch experiment runner that writes one session summary file, revision signals, and eight experiment questions.
-
-**v2.2.1** registers B-MiRA's data types with LangGraph's checkpoint serializer, so runs keep working when newer LangGraph releases block unregistered types. Use v2.2.1 or later for live experiments.
-
-**v2.2.2** stops sending a fixed temperature, which some reasoning models reject (`Settings.temperature`, default `None` = the model's own default), and makes file encodings explicit so tests pass on Windows.
-
-**v2.3.0** makes live runs safe to pay for: preflight checks, fatal-error abort, partial summaries for runs that stop early, per-task reasoning effort, a soft token budget, cost estimates, reasoning-token counts, and provenance of uncommitted edits. Log lines from parallel steps no longer merge.
-
-**v2.4.0** fixes problems seen in the first live run. Graph nodes are entities, with measurement, process and tissue words kept as qualifiers. Lists are split into one claim per entity, and placeholders are rejected. Ontology choice is species-aware. The mention check accepts abbreviations the paper defines and the previous sentence. Targeted searches return fewer hits, judged against their step, with a relevance cut-off. Entity resolution is batched, parallel and cached across runs, and classification tasks run on the cheap model.
-
-**v2.5.0** fixes problems seen in the third live run (pilot3, butyrate and Tregs). Pair comparison now matches verdicts by position, so conflicts can be found (0 of 227 pairs were judged before). Entity names are looked up before they become local ids, Greek letters and charges keep entities apart, and genotype notation stays whole. Method and comparator wording is recognised more widely, including trial wording, and a randomized trial with a control arm can grade strong. A finding on a subtype supports the link to its parent, and a null finding can contradict a required-for step. A decline or loss in the question ("NAD+ decline", "TET2 loss") is read as a decrease of the bare entity and the expected pathway sign follows it. Verification no longer flags cell names such as "induced regulatory T cells" or negated statements as overclaims. Session files hide the NCBI key and email and list every claim and step. Papers read per round: 10 to 20.
-
-**v2.6.0** fixes problems seen in pilots 4–7 (butyrate and Tregs) and prepares for other questions. Each run saves its state and can be replayed with new code without searching again. Salts, acids and "given" wording name the parent chemical; ontology lookup rejects measurement, allele and strain-tagged terms; cell subtypes inherit the cell type they name; "X activity" after a gene symbol or enzyme is X with an activity attribute; identical labels merge without asking the model; a paper's own abbreviations are expanded when they resolve to nothing. Knockouts are written as *required for*, binding has no direction, inhibition is a decrease, and a finding in a knockout or deficiency is restated as the lost entity's normal role. The portfolio gives one direct route per outcome and no slot to it, stops proposals at the first readout, reduces fan-shaped proposals to one chain, weighs targets by progress and nearness to the exposure, and ranks unfinished routes by supported steps. Targets, conflict candidates and pairs are matched by number, not by echoed ids; one failed screening reply no longer costs the batch. The verifier keeps trailing citations with their sentence and no longer flags association wording, emphasis, link labels, denied claims, statements of absence or proposed experiments; the entailment judge sees each claim's system and design and skips proposals. The question parser answers in English, lists the members of a class exposure, gives clinical readouts, and stops out-of-scope questions before any search. New: `bmira.probe`, an A/B harness for extraction effort (extraction stays at medium: low read 18% fewer claims), and signals for a split exposure node and for Supported steps on no pathway. The walk-through notebook was removed.
-
-## License
-
-MIT. See [LICENSE](LICENSE). Dependencies keep their own licenses. Literature retrieved from PubMed, Europe PMC and the EBI Ontology Lookup Service is subject to those services' terms and is not stored in this repository. The papers in `bmira/fixtures/` are invented test data, not real literature.
-
-## Citing
-
-If B-MiRA helps your work, please cite it. GitHub's "Cite this repository" button reads [CITATION.cff](CITATION.cff).
+MIT ([LICENSE](LICENSE)). Literature retrieved from PubMed, Europe PMC and EBI OLS is subject to those services' terms and is not stored here; `bmira/fixtures/` papers are invented. Cite via [CITATION.cff](CITATION.cff).
