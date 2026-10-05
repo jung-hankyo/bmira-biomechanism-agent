@@ -1,0 +1,10 @@
+{
+  "note": "Expected exposure -> outcome routes per experiment question. 'via' lists the intermediates in order; each step may list synonyms. Only the owner sets status 'confirmed'; drafts are never scored.",
+  "questions": [
+    {"question": "Does butyrate produced by gut microbiota induce colonic regulatory T cells, and through which mechanisms?",
+     "status": "template",
+     "routes": [
+       {"name": "example: receptor route", "via": [["GPR109A", "HCAR2"]], "blocking_test_known": null, "pmids": []}
+     ]}
+  ]
+}
