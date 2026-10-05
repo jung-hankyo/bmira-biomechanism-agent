@@ -208,21 +208,46 @@ def test_assembled_needs_compatible_contexts():
 
 
 def test_convergence_needs_a_mechanism_that_no_rival_can_overtake():
+    """Search finds steps, not blocking tests (EM-6 is off), so an open rival can at best be assembled."""
     from bmira.schemas import Hypothesis
     s = Settings()
     lead = Hypothesis(id="H1", name="a", origin="llm_seed", links=["X|i|M", "M|i|Y"], status="assembled",
                       score=0.7, open=False)
     rival = Hypothesis(id="H2", name="b", origin="llm_seed", links=["X|i|N", "N|i|Y"], status="insufficient",
                        logic_factor=0.5, open=True)
-    assert pf.decide([lead, rival], ["t"], 1, s) == ("search_more", "TARGETED")       # the rival could be shown
-    lead.status = "demonstrated"
-    assert pf.decide([lead, rival], ["t"], 1, s) == ("done", "CONVERGED")             # same tier at best, lower score
+    assert pf.decide([lead, rival], ["t"], 1, s) == ("done", "CONVERGED")             # rival: assembled at 0.5 at best
     rival.logic_factor = 0.9
+    assert pf.decide([lead, rival], ["t"], 1, s)[1] == "TARGETED"                     # could overtake on score
+    lead.status = "demonstrated"
+    assert pf.decide([lead, rival], ["t"], 1, s)[1] == "CONVERGED"                    # a higher tier than search reaches
+    lead.status = "insufficient"
     assert pf.decide([lead, rival], ["t"], 1, s)[1] == "TARGETED"
     direct = Hypothesis(id="H3", name="d", origin="ledger_path", links=["X|i|Y"], status="supported", score=1.0)
-    rival.logic_factor = 0.5
     assert pf.decide([direct, rival], ["t"], 1, s)[1] == "TARGETED"                   # a direct route answers 'whether'
     assert pf.decide([direct], ["t"], 1, s)[1] == "CONVERGED"                         # ... unless it is all there is
+
+
+def test_one_blocking_test_shows_a_route_only_if_every_intermediate_is_covered():
+    """Review finding: a blocking test of M marked X -> M -> B -> Y as shown though nothing tested B."""
+    from bmira.schemas import Hypothesis
+    keys = [pf.link_key(a, "increases", b) for a, b in (("LOCAL:x", "LOCAL:m"), ("LOCAL:m", "LOCAL:b"),
+                                                          ("LOCAL:b", "LOCAL:y"))]
+    def links(*statuses):
+        return {k: pf.LinkEvidence(key=k, subject=k.split("|")[0], relation="increases", object=k.split("|")[2],
+                                   subject_label=k.split("|")[0][6:], object_label=k.split("|")[2][6:],
+                                   status=st, reason=st) for k, st in zip(keys, statuses)}
+    shown = _index([_block("a", "p1", "abolished")])
+    route = lambda: Hypothesis(id="H1", name="r", origin="llm_seed", links=keys)
+    status, reason = _verdict(route(), links("insufficient", "insufficient", "insufficient"), shown)
+    assert status == "insufficient" and reason.startswith("blocking LOCAL:m removed the effect, but")
+    assert _verdict(route(), links("insufficient", "supported", "supported"), shown)[0] == "demonstrated"
+
+
+def test_supported_steps_in_clashing_cell_types_close_the_route():
+    """Review finding: such a route stayed open, offered no search target, and blocked convergence."""
+    (out,) = pf.evaluate([_route("supported", "supported", contexts={0: ["CL:a"], 1: ["CL:b"]})[0]],
+                         _route("supported", "supported", contexts={0: ["CL:a"], 1: ["CL:b"]})[1], {}, "up", Settings())
+    assert out.status == "insufficient" and not out.open
 
 
 def test_the_report_shows_the_blocking_test_and_the_direct_effect(offline):

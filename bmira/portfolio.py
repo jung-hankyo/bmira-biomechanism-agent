@@ -439,8 +439,15 @@ def evaluate(hyps, links, categories, expected, settings, mediation=None, ancest
         step = lambda ln: f"{ln.subject_label} → {ln.object_label}"
         bad = next((ln for ln in ls if ln.status == "contradicted"), None)
         gap = next((ln for ln in ls if ln.status == "insufficient" and ln.exhausted), None)
-        meds = [m for ms in mediation_of(h, mediation).values() for m in ms]
+        by_m = mediation_of(h, mediation)
+        meds = [m for ms in by_m.values() for m in ms]
         shown = next((m for m in meds if m.status == "demonstrated"), None)
+        # a blocking test of M says nothing about another intermediate N of the same route: each intermediate
+        # is covered by its own blocking test or by both steps that touch it being supported
+        uncovered = [n for n in nodes(h.links)[1:-1]
+                     if not any(m.status == "demonstrated" for m in by_m.get(n, []))
+                     and not all(links[k].status == "supported" for k in h.links
+                                 if n in (links[k].subject, links[k].object))]
         refuted = next((m for m in meds if m.status == "refuted"), None)
         all_supported = bool(ls) and all(ln.status == "supported" for ln in ls)
         coherent = all(contexts_compatible(a.contexts, b.contexts, ancestors) for a, b in zip(ls, ls[1:]))
@@ -449,7 +456,7 @@ def evaluate(hyps, links, categories, expected, settings, mediation=None, ancest
         elif is_direct(h) or len(nodes(h.links)) <= 2:       # no intermediate: nothing to block or assemble
             h.status, h.reason = ("supported", "every step has independent support") if all_supported else \
                 ("insufficient", f"{step(ls[0])}: {ls[0].reason}")
-        elif shown:
+        elif shown and not uncovered:
             h.status, h.reason = "demonstrated", (f"blocking {shown.mediator_label} removed the effect on "
                                                   f"{shown.outcome_label} ({shown.reason})")
         elif all_supported and coherent:
@@ -464,9 +471,11 @@ def evaluate(hyps, links, categories, expected, settings, mediation=None, ancest
         else:
             weakest = gap or min(ls, key=lambda ln: ln.completeness)
             done = sum(ln.status == "supported" for ln in ls)
-            h.status, h.reason = "insufficient", f"{step(weakest)}: {weakest.reason}" + (
+            h.status, h.reason = "insufficient", (f"blocking {shown.mediator_label} removed the effect, but "
+                                                  if shown else "") + f"{step(weakest)}: {weakest.reason}" + (
                 f" ({done} of {len(ls)} steps supported)" if done and len(ls) > 1 else "")
-        h.open = h.status == "insufficient" and gap is None
+        # open = search can still change it; supported steps in clashing cell types are not search targets
+        h.open = h.status == "insufficient" and gap is None and not all_supported
     # the score is gated by the weakest step, so on sparse literature every route scores 0: order those by progress
     progress = {h.id: sum(links[k].completeness for k in h.links) / max(1, len(h.links)) for h in hyps}
     hyps.sort(key=lambda h: (-ROUTE_TIER[h.status], -h.score, -progress[h.id], h.id))
@@ -513,9 +522,12 @@ def allocate(hyps, links, settings, round_idx: int) -> list[str]:
 
 
 def reachable_tier(h) -> int:
-    """The highest tier an open route could still reach: a route with an intermediate can be shown by a
-    blocking test; a one-step route can at best be supported."""
-    return ROUTE_TIER["demonstrated"] if len(nodes(h.links)) > 2 else ROUTE_TIER["assembled"]
+    """The highest tier search can bring an open route to. Targeted search looks for steps, so 'assembled'.
+
+    # ponytail: a route with an intermediate could also be shown by a blocking test, but nothing searches for
+    # one until EM-6 (blocking-test targets) is enabled; return 'demonstrated' for those routes then.
+    """
+    return ROUTE_TIER["assembled"]
 
 
 def decide(hyps, targets, completed_rounds: int, settings) -> tuple[str, str]:

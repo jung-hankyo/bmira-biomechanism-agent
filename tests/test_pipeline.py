@@ -37,15 +37,16 @@ def test_aliases_in_run(offline):
 
 # P3: the LLM's favourite pathway is wrong; the unseeded one must finish leading.
 def test_portfolio_escapes_lock_in(offline):
-    _, final = offline
+    rt, final = offline
     hyps = {h.name: h for h in final["hypotheses"]}
     assert final["hypotheses"][0].name == "Redox-metabolic route"
     assert hyps["Redox-metabolic route"].status == "demonstrated"      # EM-4: S020 blocks glycolytic flux
     assert hyps["Redox-metabolic route"].origin == "llm_expansion"
     assert hyps["Chromatin route"].status == "contradicted"
     receptor = hyps["Receptor route"]
-    assert receptor.status == "insufficient" and "no study found" in receptor.reason
-    assert not receptor.open                                  # searched out: no more budget
+    assert receptor.status == "insufficient" and "not found" in receptor.reason
+    # the shown leader cannot be overtaken by any searchable rival, so the search stops early (EM-4)
+    assert final["gate"] == "CONVERGED" and final["round_idx"] < rt.settings.max_rounds
 
 
 def test_run_applies_evidence_rules(offline):
