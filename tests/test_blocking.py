@@ -280,3 +280,19 @@ def test_a_persisting_effect_still_counts_against_required_for():
     ln = pf.build_links([sup, null], {}, {}, {}, Settings(), extra={key})[key]
     assert ln.contradicting_ids == ["n"] and ln.status == "contradicted"
     assert pf.link_key("LOCAL:m", "no_effect", "LOCAL:y") not in pf.build_links([null], {}, {}, {}, Settings())
+
+
+def test_the_direct_effect_headline_reads_the_links_not_the_routes():
+    """Review finding: a direct step with only null findings never becomes a route, and the headline said no
+    study had tested it."""
+    from bmira.graph import _direct_effect
+    rt, _ = offline_runtime()
+    x, y = rt.resolver.resolve("lactate").id, rt.resolver.resolve("CD8 T cell effector function").id
+    k = pf.link_key(x, "no_effect", y)
+    ln = pf.LinkEvidence(key=k, subject=x, relation="no_effect", object=y, subject_label="Lactate",
+                         object_label="CD8 T cell effector function", support_ids=["c"], status="insufficient",
+                         reason="1 of 2 required papers")
+    state = {"exposure": x, "outcome": y, "outcome_ids": [y]}
+    assert _direct_effect(state, {k: ln}, rt) == ("Direct effect: Lactate no effect CD8 T cell effector function: "
+                                                   "Insufficient evidence (1 of 2 required papers)")
+    assert "no study in the ledger" in _direct_effect(state, {k: ln.model_copy(update={"support_ids": []})}, rt)

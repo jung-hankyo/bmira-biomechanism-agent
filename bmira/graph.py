@@ -844,6 +844,21 @@ def _entailment_verdicts(text, claims, issues) -> dict:
     return {**judged, **{e["sentence"]: e["verdict"] for e in issues if e.get("sentence") in judged}}
 
 
+def _direct_effect(state, links, rt) -> str:
+    """EM-7 headline: every exposure -> outcome (or readout) step with evidence, whatever its verdict. Read from
+    the links, not the routes: a direct step with only null or opposing findings never becomes a route."""
+    exposure = _canon(state.get("exposure", ""), rt)
+    named = {_canon(i, rt) for i in state.get("outcome_ids", [state.get("outcome", "")])}
+    order = ["supported", "contradicted", "insufficient"]
+    direct = sorted((ln for ln in links.values() if ln.subject == exposure and ln.object in named
+                     and (ln.support_ids or ln.contradicting_ids or ln.uncounted)),
+                    key=lambda ln: (order.index(ln.status), ln.key))
+    if not direct:
+        return "Direct effect: no study in the ledger tested the exposure against the outcome itself"
+    return "Direct effect: " + "; ".join(f"{ln.subject_label} {ln.relation.replace('_', ' ')} {ln.object_label}: "
+                                         f"{pf.STATUS_LABEL[ln.status]} ({ln.reason})" for ln in direct)
+
+
 def _blocking_lines(h, links, mediation, short=False) -> list[str]:
     """EM-7: per intermediate of a mechanism route, what blocking it did to the exposure's effect."""
     if pf.is_direct(h):
@@ -902,10 +917,7 @@ def verify(state, rt):
                      + "; ".join(f"{tags[k]} {links[k].subject_label}→{links[k].object_label} "
                                  f"({_step_label(links[k])})" for k in h.links) + " |")
     p = _as(ParsedQuestion, state["parsed"])
-    direct = [h for h in hyps if pf.is_direct(h)]
-    headline = ("Direct effect: " + "; ".join(f"{links[h.links[0]].subject_label} → {links[h.links[0]].object_label}: "
-                                             f"{pf.ROUTE_LABEL[h.status]} ({links[h.links[0]].reason})" for h in direct)
-                if direct else "Direct effect: no study in the ledger tested the exposure against the outcome itself")
+    headline = _direct_effect(state, links, rt)
     stop = (f"{headline}. Search stopped after {state['round_idx']} rounds: {pf.STOP_LABEL[state['gate']]}. "
             f"Outcome measured as: {', '.join([p.outcome] + p.outcome_readouts)}. "
             + (f"Question analysed as a decrease of {p.exposure}. " if p.exposure_change == "down" else "") +
