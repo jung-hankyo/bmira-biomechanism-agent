@@ -66,7 +66,8 @@ def judged_state(tmp_path_factory):
     path = tmp / "run_q1.state.json"
     save_state(final, rt, path)
     log = tmp / "log.jsonl"
-    log.write_text("".join(json.dumps(e) + "\n" for e in final["judge_log"]), encoding="utf-8")
+    log.write_text("".join(json.dumps({**e, "state": str(path)}) + "\n" for e in final["judge_log"]),
+                   encoding="utf-8")                          # as bmira.shadow writes it
     return path, log, final
 
 
@@ -126,3 +127,23 @@ def test_cli_scores_a_state_with_its_own_judge_log(judged_state, tmp_path, capsy
                     encoding="utf-8")
     ev.main(["--labels", str(gold), "--state", str(path)])            # nothing matches: still a table
     assert "| Task |" in capsys.readouterr().out
+
+
+def test_binary_calibration_uses_the_confidence_of_the_answer_given():
+    """Review finding: a perfect, well-calibrated judge scored ECE 0.5 because P(yes)=0.05 counted as confidence."""
+    log = [{"task": "t", "item_id": str(i), "current": None, "jev": p >= 0.5, "probability": p}
+           for i, p in enumerate([0.95, 0.9, 0.05, 0.1])]
+    gold = [{"item_id": str(i), "labels": {"t": y}} for i, y in enumerate([True, True, False, False])]
+    (r,) = ev.evaluate(log, gold)
+    assert r["jev"]["accuracy"] == 1.0 and r["jev"]["ece"] <= 0.1
+    assert ev.prf([True, False], [False, True])["f1"] == 0.0               # no true positive: 0, not 'unknown'
+
+
+def test_the_same_claim_id_in_two_runs_is_two_items():
+    """Claim ids repeat across runs of one question; a label for pilot5's C1_0 must not score pilot6's."""
+    log = [{"task": "t", "item_id": "C1_0", "current": True, "jev": True, "probability": 0.9, "state": "runs/p5.json"},
+           {"task": "t", "item_id": "C1_0", "current": False, "jev": False, "probability": 0.1, "state": "/x/p6.json"}]
+    gold = [{"item_id": "C1_0", "source": "p5.json", "labels": {"t": True}},
+            {"item_id": "C1_0", "source": "runs/p6.json", "labels": {"t": False}}]
+    (r,) = ev.evaluate(log, gold)
+    assert r["labeled"] == 2 and r["current"]["accuracy"] == 1.0 and r["jev"]["accuracy"] == 1.0

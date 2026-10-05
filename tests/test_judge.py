@@ -227,3 +227,26 @@ def test_saved_claims_are_read_back_as_extracted():
     c.comparator_present, c.perturbation_class = False, "none"
     before = _reconstructed(c)
     assert before.comparator_present and before.perturbation_class == "knockout" and not c.comparator_present
+
+
+def test_a_reply_that_is_not_an_object_costs_one_item(tmp_path, http):
+    """Review finding: '["oops"]' raised TypeError out of ask_many and lost the whole batch."""
+    j = _judge(tmp_path, judge_workers=1)
+    http["replies"] = [OK, Reply(200, ["oops"]), Reply(200, {"answers": {"ok": {"noul": 0.5}}, "usage": "n/a"})]
+    out = j.ask_many("t", [({"word": "a"}, NOUL), ({"word": "b"}, NOUL), ({"word": "c"}, NOUL)])
+    assert out[0] and out[1] is None and out[2] == {"ok": {"noul": 0.5}} and j.failures["t"] == 1
+
+
+def test_an_unreachable_service_is_switched_off_without_waiting_after_the_last_try(tmp_path, monkeypatch, http):
+    """Review finding: a hanging endpoint cost ~4 minutes per item inside pipeline nodes."""
+    waits = []
+    monkeypatch.setattr(jd.time, "sleep", waits.append)
+    j = _judge(tmp_path, judge_workers=1, judge_max_retries=2)
+    http["replies"] = [requests.Timeout("slow")] * 6
+    assert j.ask_many("t", [({"word": w}, NOUL) for w in "abcde"]) == [None] * 5
+    assert j.disabled.startswith("unreachable") and len(http["sent"]) == 6        # 3 items x 2 tries, then off
+    assert waits == [1, 1, 1]                                                      # one wait per item, none after the last try
+    http["replies"] = [requests.Timeout("slow"), OK]                               # a success resets the count
+    j2 = _judge(tmp_path / "x", judge_workers=1, judge_max_retries=1)
+    j2.ask_many("t", [({"word": "a"}, NOUL), ({"word": "b"}, NOUL)])
+    assert j2.disabled == "" and j2._lost_in_a_row == 0

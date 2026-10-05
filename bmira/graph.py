@@ -434,7 +434,8 @@ def normalize(state, rt):
                     c.relation_confidence = r.confidence
         except Exception as e:
             print(f"[relation] batch failed ({type(e).__name__}); claims stay pending for retry")
-    log = shadow.relations(rt, [(c, c.relation_norm, c.relation_source) for c in fresh])   # as worded, before restatement
+    log = shadow.relations(rt, [(c, c.relation_norm, c.relation_source) for c in fresh    # as worded, before
+                                if c.relation_source != "blocking_test"])                  # restatement; not results
     for c in fresh:      # 'Tet2 loss increases IL-6' and 'Gpr109a-/- mice show fewer DCs' are 'Tet2 decreases IL-6'
         lost = c.subject_lost or entity_change(c.subject) == "down"      # for the bare entity; one flip, not two
         if c.is_blocking_test:                                           # typed from its result: never restated

@@ -18,6 +18,7 @@ def _recording(rt, task):
 
 
 def test_reviews_are_not_extracted_but_inform_the_seed():
+    """TE-1. Pilot4 extracted 8 reviews (8 of 36 extraction calls) for 28 claims that R1 never counted."""
     rt, sc = offline_runtime()
     seed = _recording(rt, "seed")
     final, info = execute(sc["question"], rt, echo=False)

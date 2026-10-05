@@ -30,11 +30,16 @@ from bmira import questions as Q
 API = "https://api.typesafe.ai/v1/systemone"
 RETRYABLE = {429, 500, 502, 503, 529}
 FATAL = {401, 403, 404}          # bad key, no access, unknown model: retrying cannot help
+BREAKER = 3                      # consecutive items lost to transport errors: the service is down for this run
 MOVING_ALIASES = ("-latest", "-preview")
 
 
 class JudgeUnavailable(Exception):
     pass
+
+
+class _Exhausted(JudgeUnavailable):
+    """Every retry met a transient error: counts toward the circuit breaker."""
 
 
 class _Counted:
@@ -51,7 +56,7 @@ class _Counted:
         def one(x):
             try:
                 return self.ask(task, *x)
-            except JudgeUnavailable:
+            except Exception:                    # noqa: BLE001 - whatever went wrong, it costs this item only
                 return None
         if not items:
             return []
@@ -70,6 +75,9 @@ class JevJudge(_Counted):
             raise RuntimeError("TYPESAFE_API_KEY missing; set judge_provider='off' to run without the judge")
         self._init_counters(settings.judge_model)
         self.workers = settings.judge_workers
+        # one cap for the whole run: parallel extract nodes each open their own pool
+        self._slots = threading.BoundedSemaphore(max(1, settings.judge_workers))
+        self._lost_in_a_row = 0
         self.path = Path(settings.cache_dir) / f"judge_{settings.judge_model}.json" if settings.cache_dir else None
         self.cache = self._load()
         self._dirty = False
@@ -102,44 +110,60 @@ class JevJudge(_Counted):
             self.model_of[task] = self.s.judge_model
         t0 = time.perf_counter()
         try:
-            for attempt in range(self.s.judge_max_retries):
-                try:
-                    r = requests.post(API, timeout=self.s.judge_timeout_s,
-                                      headers={"Authorization": f"Bearer {self.key}"},
-                                      json={"state": state, "model": self.s.judge_model, "questions": questions})
-                except (requests.ConnectionError, requests.Timeout):
-                    time.sleep(min(2 ** attempt, 30))
-                    continue
-                if r.status_code in RETRYABLE:
-                    time.sleep(min(2 ** attempt, 30))
-                    continue
-                if r.status_code in FATAL:
-                    with self._lock:
-                        self.disabled = f"HTTP {r.status_code}"
-                    print(f"[judge][WARN] HTTP {r.status_code}: judge switched off for this run")
-                    raise JudgeUnavailable(f"{task}: HTTP {r.status_code}")
-                r.raise_for_status()
-                body = r.json()
-                answers = body["answers"]
-                if not isinstance(answers, dict):
-                    raise ValueError("answers is not an object")
-                with self._lock:
-                    self.tokens_in[task] += (body.get("usage") or {}).get("input_tokens", 0) or 0
-                    self.cache[k] = answers
-                    self._dirty = True
-                return answers
-            raise JudgeUnavailable(f"{task}: retries exhausted")
-        except JudgeUnavailable:
+            answers = self._post(task, state, questions)
+            with self._lock:
+                self.cache[k] = answers
+                self._dirty = True
+                self._lost_in_a_row = 0
+            return answers
+        except Exception as e:                   # noqa: BLE001 - malformed replies included: one item lost
             with self._lock:
                 self.failures[task] += 1
-            raise
-        except (requests.RequestException, KeyError, ValueError) as e:
-            with self._lock:
-                self.failures[task] += 1
+                transport = isinstance(e, (requests.ConnectionError, requests.Timeout, _Exhausted))
+                self._lost_in_a_row = self._lost_in_a_row + 1 if transport else 0
+                if self._lost_in_a_row >= BREAKER and not self.disabled:
+                    self.disabled = f"unreachable ({BREAKER} items in a row)"
+                    print(f"[judge][WARN] {self.disabled}: judge switched off for this run")
+            if isinstance(e, JudgeUnavailable):
+                raise
             raise JudgeUnavailable(f"{task}: {type(e).__name__}") from e
         finally:
             with self._lock:
                 self.seconds[task] += time.perf_counter() - t0
+
+    def _post(self, task, state, questions) -> dict:
+        tries = max(1, self.s.judge_max_retries)
+        for attempt in range(tries):
+            last = attempt == tries - 1
+            try:
+                with self._slots:
+                    r = requests.post(API, timeout=self.s.judge_timeout_s,
+                                      headers={"Authorization": f"Bearer {self.key}"},
+                                      json={"state": state, "model": self.s.judge_model, "questions": questions})
+            except (requests.ConnectionError, requests.Timeout):
+                if last or self.disabled:
+                    raise
+                time.sleep(min(2 ** attempt, 30))
+                continue
+            if r.status_code in RETRYABLE:
+                if last or self.disabled:
+                    raise _Exhausted(f"{task}: retries exhausted (HTTP {r.status_code})")
+                time.sleep(min(2 ** attempt, 30))
+                continue
+            if r.status_code in FATAL:
+                with self._lock:
+                    self.disabled = f"HTTP {r.status_code}"
+                print(f"[judge][WARN] HTTP {r.status_code}: judge switched off for this run")
+                raise JudgeUnavailable(f"{task}: HTTP {r.status_code}")
+            r.raise_for_status()
+            body = r.json()
+            if not isinstance(body, dict) or not isinstance(body.get("answers"), dict):
+                raise ValueError("reply is not {answers: {...}}")
+            usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+            with self._lock:
+                self.tokens_in[task] += int(usage.get("input_tokens") or 0)
+            return body["answers"]
+        raise _Exhausted(f"{task}: retries exhausted")
 
     def save(self):
         """Write the cache atomically, so replays at the same model version are free and identical."""

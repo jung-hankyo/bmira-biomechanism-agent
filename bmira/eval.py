@@ -33,13 +33,24 @@ def read_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def source_of(row: dict) -> str:
+    """The saved run an item came from (file name only). Claim ids repeat across runs of one question
+    ('C123_0' is a different claim in pilot5 and pilot6), so items are matched by source as well."""
+    src = row.get("state") or row.get("source") or ""
+    return Path(src).name if src else ""
+
+
+def _key(task, row) -> tuple:
+    return task, str(row["item_id"]), source_of(row)
+
+
 def gold_labels(rows: list[dict]) -> dict:
-    """(task, item_id) -> label, skipping unlabeled (null) entries."""
+    """(task, item_id, source) -> label, skipping unlabeled (null) entries."""
     out = {}
     for r in rows:
         for task, label in (r.get("labels") or {}).items():
             if label is not None:
-                out[(task, str(r["item_id"]))] = label
+                out[_key(task, r)] = label
     return out
 
 
@@ -71,7 +82,8 @@ def prf(pred: list[bool], labels: list[bool]) -> dict:
     fn = sum(not p and y for p, y in zip(pred, labels))
     precision = tp / (tp + fp) if tp + fp else None
     recall = tp / (tp + fn) if tp + fn else None
-    f1 = 2 * precision * recall / (precision + recall) if precision and recall else None
+    f1 = None if precision is None or recall is None else \
+        (2 * precision * recall / (precision + recall) if precision + recall else 0.0)
     r = lambda x: None if x is None else round(x, 4)
     return {"precision": r(precision), "recall": r(recall), "f1": r(f1), "tp": tp, "fp": fp, "fn": fn}
 
@@ -91,7 +103,7 @@ def threshold_for(probs: list[float], labels: list[bool], precision: float | Non
 
 def score_task(task: str, entries: list[dict], gold: dict) -> dict:
     """Both executors on one task: `current` (today) and `jev` (the judge), against the gold labels."""
-    rows = [(e, gold[(task, str(e["item_id"]))]) for e in entries if (task, str(e["item_id"])) in gold]
+    rows = [(e, gold[_key(task, e)]) for e in entries if _key(task, e) in gold]
     out = {"task": task, "labeled": len(rows)}
     if not rows:
         return out
@@ -112,7 +124,9 @@ def score_task(task: str, entries: list[dict], gold: dict) -> dict:
     probs = [(e["probability"], e["jev"], y) for e, y in rows if e.get("probability") is not None]
     if probs and binary:                         # yes/no tasks log P(yes) as the probability
         p_yes, ys = [p for p, _, _ in probs], [y for _, _, y in probs]
-        out["jev"].update({"auroc": auroc(p_yes, ys), "ece": ece(p_yes, [(p >= 0.5) == y for p, y in zip(p_yes, ys)]),
+        # calibration of the predicted answer: its confidence is max(P(yes), P(no))
+        out["jev"].update({"auroc": auroc(p_yes, ys),
+                           "ece": ece([max(p, 1 - p) for p in p_yes], [(p >= 0.5) == y for p, y in zip(p_yes, ys)]),
                            "threshold_precision_0.95": threshold_for(p_yes, ys, precision=0.95),
                            "threshold_recall_0.95": threshold_for(p_yes, ys, recall=0.95)})
     elif probs:
@@ -125,7 +139,7 @@ def evaluate(log: list[dict], gold_rows: list[dict], tasks=None) -> list[dict]:
     by_task = defaultdict(list)
     for e in log:
         by_task[e["task"]].append(e)
-    wanted = tasks or sorted({t for t, _ in gold} & set(by_task))
+    wanted = tasks or sorted({k[0] for k in gold} & set(by_task))
     return [score_task(t, by_task.get(t, []), gold) for t in wanted]
 
 
@@ -189,7 +203,8 @@ def main(argv=None):
         return result
     if not a.labels:
         ap.error("--labels is required unless --mechanisms is given")
-    log = [e for p in a.log for e in read_jsonl(p)] + [e for st in states for e in st.get("judge_log", [])]
+    log = [e for p in a.log for e in read_jsonl(p)] + [{**e, "state": str(path)} for path, st in zip(a.state, states)
+                                                        for e in st.get("judge_log", [])]
     result = evaluate(log, read_jsonl(a.labels), a.task)
     print("| Task | Labeled | Today: accuracy | Judge: accuracy | Judge AUROC | Judge ECE |\n|---|---|---|---|---|---|")
     for r in result:

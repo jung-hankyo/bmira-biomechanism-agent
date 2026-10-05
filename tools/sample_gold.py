@@ -129,7 +129,7 @@ def disagreements_form(logs, agree_share=0.2, seed=7) -> list[dict]:
             if not e or e.get("current") is None or e.get("jev") is None:
                 continue
             if e["current"] != e["jev"] or rng.random() < agree_share:
-                rows.append({"item_id": e["item_id"], "source": str(path), "task": e["task"],
+                rows.append({"item_id": e["item_id"], "source": e.get("state") or str(path), "task": e["task"],
                              "context": {k: v for k, v in e.items() if k in {"text", "step", "drop_reason"}},
                              "today": e["current"], "judge": e["jev"], "disagree": e["current"] != e["jev"],
                              "labels": {e["task"]: None}})

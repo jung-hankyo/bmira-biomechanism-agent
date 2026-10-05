@@ -272,7 +272,8 @@ def shadow_state(path, rt) -> list:
     for pmid, records in by_paper.items():
         if pmid in papers:
             log += claims(rt, papers[pmid], records)
-    log += relations(rt, [(c, typed_relation(c), c.relation_source) for c in st.get("claims", [])])
+    log += relations(rt, [(c, typed_relation(c), c.relation_source) for c in st.get("claims", [])
+                          if c.relation_source != "blocking_test"])          # typed from the result, not the wording
     if st.get("synthesis"):
         v = st.get("verification", {})
         flagged = {o["sentence"] for o in v.get("overclaims", [])}
