@@ -1,0 +1,27 @@
+# Offline checks on every push and pull request: no API keys, no network calls from the tests.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.10"
+            extras: dev
+          - python-version: "3.12"
+            extras: dev,app          # also runs the Streamlit app test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[${{ matrix.extras }}]"
+      - run: ruff check .
+      - run: pytest --cov --cov-report=term

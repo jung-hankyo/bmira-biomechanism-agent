@@ -77,9 +77,11 @@ pip install -r requirements.txt
 **1. Try it offline (no keys, no network).** A synthetic scenario and a scripted model exercise the whole pipeline:
 
 ```bash
-python -m pytest -q tests          # 83 tests
+python -m pytest -q tests          # 102 tests, offline
 streamlit run app.py               # choose "Offline demo" in the sidebar
 ```
+
+**For development,** `pip install -e ".[dev,app]"` installs the package with pytest, ruff and the app; `ruff check .` and `pytest` are what CI runs. CLAUDE.md lists the conventions.
 
 **2. Run it live.** Choose *Live* in the app's sidebar and enter an OpenAI or Anthropic API key and your NCBI email. Or set them once:
 
@@ -142,6 +144,7 @@ bmira/
   offline.py              Scripted model + synthetic corpus for key-free runs
   fixtures/               Synthetic test scenario (invented papers)
 tests/                    Offline tests, one file per pipeline stage (helpers.py, conftest.py: shared)
+pyproject.toml            Package metadata, extras, pytest and ruff settings
 LICENSE  CITATION.cff     MIT license; citation metadata
 ```
 
@@ -190,15 +193,15 @@ All in `bmira/config.py`; the app exposes the round limit.
 
 **v2.2.1** registers B-MiRA's data types with LangGraph's checkpoint serializer, so runs keep working when newer LangGraph releases block unregistered types. Use v2.2.1 or later for live experiments.
 
+**v2.2.2** stops sending a fixed temperature, which some reasoning models reject (`Settings.temperature`, default `None` = the model's own default), and makes file encodings explicit so tests pass on Windows.
+
+**v2.3.0** makes live runs safe to pay for: preflight checks, fatal-error abort, partial summaries for runs that stop early, per-task reasoning effort, a soft token budget, cost estimates, reasoning-token counts, and provenance of uncommitted edits. Log lines from parallel steps no longer merge.
+
 **v2.4.0** fixes problems seen in the first live run. Graph nodes are entities, with measurement, process and tissue words kept as qualifiers. Lists are split into one claim per entity, and placeholders are rejected. Ontology choice is species-aware. The mention check accepts abbreviations the paper defines and the previous sentence. Targeted searches return fewer hits, judged against their step, with a relevance cut-off. Entity resolution is batched, parallel and cached across runs, and classification tasks run on the cheap model.
 
 **v2.5.0** fixes problems seen in the third live run (pilot3, butyrate and Tregs). Pair comparison now matches verdicts by position, so conflicts can be found (0 of 227 pairs were judged before). Entity names are looked up before they become local ids, Greek letters and charges keep entities apart, and genotype notation stays whole. Method and comparator wording is recognised more widely, including trial wording, and a randomized trial with a control arm can grade strong. A finding on a subtype supports the link to its parent, and a null finding can contradict a required-for step. A decline or loss in the question ("NAD+ decline", "TET2 loss") is read as a decrease of the bare entity and the expected pathway sign follows it. Verification no longer flags cell names such as "induced regulatory T cells" or negated statements as overclaims. Session files hide the NCBI key and email and list every claim and step. Papers read per round: 10 to 20.
 
 **v2.6.0** fixes problems seen in pilots 4–7 (butyrate and Tregs) and prepares for other questions. Each run saves its state and can be replayed with new code without searching again. Salts, acids and "given" wording name the parent chemical; ontology lookup rejects measurement, allele and strain-tagged terms; cell subtypes inherit the cell type they name; "X activity" after a gene symbol or enzyme is X with an activity attribute; identical labels merge without asking the model; a paper's own abbreviations are expanded when they resolve to nothing. Knockouts are written as *required for*, binding has no direction, inhibition is a decrease, and a finding in a knockout or deficiency is restated as the lost entity's normal role. The portfolio gives one direct route per outcome and no slot to it, stops proposals at the first readout, reduces fan-shaped proposals to one chain, weighs targets by progress and nearness to the exposure, and ranks unfinished routes by supported steps. Targets, conflict candidates and pairs are matched by number, not by echoed ids; one failed screening reply no longer costs the batch. The verifier keeps trailing citations with their sentence and no longer flags association wording, emphasis, link labels, denied claims, statements of absence or proposed experiments; the entailment judge sees each claim's system and design and skips proposals. The question parser answers in English, lists the members of a class exposure, gives clinical readouts, and stops out-of-scope questions before any search. New: `bmira.probe`, an A/B harness for extraction effort (extraction stays at medium: low read 18% fewer claims), and signals for a split exposure node and for Supported steps on no pathway. The walk-through notebook was removed.
-
-**v2.3.0** makes live runs safe to pay for: preflight checks, fatal-error abort, partial summaries for runs that stop early, per-task reasoning effort, a soft token budget, cost estimates, reasoning-token counts, and provenance of uncommitted edits. Log lines from parallel steps no longer merge.
-
-**v2.2.2** stops sending a fixed temperature, which some reasoning models reject (`Settings.temperature`, default `None` = the model's own default), and makes file encodings explicit so tests pass on Windows.
 
 ## License
 

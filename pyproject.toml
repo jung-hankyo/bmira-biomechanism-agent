@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bmira"
+dynamic = ["version"]
+description = "B-MiRA: Biomedical Mechanism Inference Research Agent"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Hankyo Jung" }]
+# What the offline kit and the tests need. Live runs add a provider extra; see requirements.txt.
+dependencies = ["langgraph>=1.0", "langchain-core>=1.0", "pydantic>=2", "requests", "numpy"]
+
+[project.optional-dependencies]
+openai = ["langchain-openai"]
+anthropic = ["langchain-anthropic"]
+embeddings = ["sentence-transformers"]   # live runs; the offline kit uses a hashing encoder
+app = ["streamlit>=1.40", "pandas"]
+dev = ["pytest", "pytest-cov", "ruff"]
+
+[project.urls]
+Repository = "https://github.com/jung-hankyo/bmira-biomechanism-agent"
+
+[tool.setuptools]
+packages = ["bmira"]
+
+[tool.setuptools.package-data]
+bmira = ["fixtures/*.json"]
+
+[tool.setuptools.dynamic]
+version = { attr = "bmira.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["bmira"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+# Errors only, not style: unused or undefined names, syntax errors, likely bugs.
+select = ["F", "E9", "B"]
+ignore = [
+    "B019",   # lru_cache on LangChainLLM._model: one client per instance by design
+    "B904",   # raise without `from` inside except (ab_extract)
+    "B905",   # zip() without strict=: adding it would change behaviour on unequal inputs
+]

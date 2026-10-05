@@ -10,8 +10,6 @@ unresolved exposure or an odd outcome here would cost a whole run later.
 """
 import argparse
 import os
-import sys
-from pathlib import Path
 
 from bmira import Runtime, Settings
 from bmira.experiments import ROOT, load_questions
