@@ -141,7 +141,7 @@ bmira/
   ab_extract.py           A/B harness for extraction settings on stored papers
   offline.py              Scripted model + synthetic corpus for key-free runs
   fixtures/               Synthetic test scenario (invented papers)
-tests/test_bmira.py       One test per design guarantee
+tests/                    Offline tests, one file per pipeline stage (helpers.py, conftest.py: shared)
 LICENSE  CITATION.cff     MIT license; citation metadata
 ```
 
