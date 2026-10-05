@@ -70,8 +70,12 @@ def main(argv=None) -> Path:
     out = a.out or ROOT / "runs" / f"session_{datetime.now():%Y%m%d_%H%M%S}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     overrides = {k: v for k, v in (("max_rounds", a.max_rounds), ("budget_tokens", a.budget_tokens)) if v}
-    probe, _ = _runtime(a, overrides)
-    s = probe.settings
+    try:
+        probe, _ = _runtime(a, overrides)
+        s, built = probe.settings, None
+    except Exception as e:             # e.g. a missing API key: say so in the session file, spend nothing
+        probe, s = None, Settings(provider=a.provider, **overrides)
+        built = f"{type(e).__name__}: {e}"
     session = {"session": {
         "started": datetime.now().isoformat(timespec="seconds"), "bmira_version": __version__,
         "git": git_state(), "python": platform.python_version(), "mode": "replay" if a.replay else "offline" if a.offline else "live",
@@ -85,6 +89,11 @@ def main(argv=None) -> Path:
 
     if session["session"]["git"]["uncommitted_changes"]:
         print(f"[WARN] running with uncommitted changes: {session['session']['git']['changed_files']}")
+    if built:
+        session["session"]["aborted"] = f"runtime could not be built: {built}"[:500]
+        save()
+        print(f"\nAborted before spending: {session['session']['aborted']}\nSession summary: {out}")
+        return out
     if not a.no_preflight:
         checks = preflight(probe)
         session["session"]["preflight"] = checks

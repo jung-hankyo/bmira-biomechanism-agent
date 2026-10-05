@@ -116,3 +116,16 @@ def test_split_exposure_and_off_portfolio_support_are_signalled():
     assert n >= 2 and len(off["steps"]["supported_off_portfolio"]) == n
     assert "supported off-portfolio" in names(off)
 
+
+
+def test_missing_api_key_is_written_to_the_session_file(tmp_path, monkeypatch):
+    """W3/HY-2: a live session without a key used to crash before any session file existed."""
+    import json
+    from bmira.experiments import main
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    qs = tmp_path / "q.txt"
+    qs.write_text("one\n", encoding="utf-8")
+    out = main(["--quiet", "--questions", str(qs), "--out", str(tmp_path / "s.json")])
+    session = json.loads(out.read_text(encoding="utf-8"))
+    assert session["runs"] == [] and "API key missing" in session["session"]["aborted"]
+    assert session["session"]["mode"] == "live" and session["session"]["provider"] == "openai"
