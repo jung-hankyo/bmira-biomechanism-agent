@@ -187,3 +187,18 @@ def test_tags_after_the_period_are_found_in_the_text():
     assert _replace_sentence(text, old, "First finding is associated [C12_0][C13_1].") == \
         "- First finding is associated [C12_0][C13_1]. Then more text.\n"
     assert _replace_sentence(text, "Not in the text.", "x") is None
+
+
+def test_every_copy_of_a_flagged_sentence_is_repaired_and_only_rewrites_are_rejudged():
+    """Review findings: a repeated overclaim was fixed once; repair re-judged entailment for the whole report."""
+    from bmira.graph import verify
+    rt, sc = offline_runtime()
+    final, _ = execute(sc["question"], rt, echo=False)
+    weak = next(c for c in final["claims"] if c.grade == "weak" and c.id in final["synthesis"])
+    bad = f"Lactate drives the loss of CD8 T cell effector function [{weak.id}]."
+    seen, real = [], rt.llm.structured
+    rt.llm.structured = lambda t, sch, sys_, user, *a, **k: (seen.append((t, user)), real(t, sch, sys_, user, *a, **k))[1]
+    out = verify({**final, "synthesis": f"{bad}\n\n{final['synthesis']}\n\n{bad}"}, rt)
+    assert bad not in out["synthesis"] and out["verification"]["passed"]
+    second = [u for t, u in seen if t == "entailment"][-1]
+    assert second.count("[SENTENCE") == 1 and "associated with the reported outcome" in second

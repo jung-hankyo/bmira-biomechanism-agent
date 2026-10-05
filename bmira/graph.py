@@ -789,9 +789,9 @@ def _replace_sentence(text: str, old: str, new: str) -> str | None:
     splitter moves citation tags written after the period ('... T cells. [C1]') in front of it, so the
     text is searched as written, then with the tags moved the same way."""
     if old in text:
-        return text.replace(old, new, 1)
+        return text.replace(old, new)                 # every copy: a repeated overclaim is one overclaim
     moved = TRAILING_TAGS.sub(lambda m: m[2] + m[1], text)
-    return moved.replace(old, new, 1) if old in moved else None
+    return moved.replace(old, new) if old in moved else None
 
 
 def _repair(text, claims, v, rt):
@@ -808,7 +808,7 @@ def _repair(text, claims, v, rt):
         cited = [by_id[i] for i in TAG.findall(s) if i in by_id]
         items.append((n, s, allowed_wording(cited) if cited else WORDING[1]))
     user = "\n\n".join(f"[SENTENCE {n}] {s}\nAllowed wording: {w}" for n, s, w in items)
-    info = {"flagged": len(bad), "rewritten": 0, "rejected": []}
+    info = {"flagged": len(bad), "rewritten": 0, "rejected": [], "new": []}
     try:
         out = rt.llm.structured("repair", RewriteBatch, PROMPTS["repair"], user, role="cheap",
                                 ctx={"items": items}, n_items=len(items))
@@ -828,6 +828,7 @@ def _repair(text, claims, v, rt):
             info["rejected"].append({"sentence": old[:200], "why": why or "sentence not found in the text"})
             continue
         text, done = replaced, done | {r.n}
+        info["new"].append((old, new))
         info["rewritten"] += 1
     print(f"[verify] repair: {info['rewritten']} of {len(bad)} flagged sentences rewritten"
           + (f", {len(info['rejected'])} rejected" if info["rejected"] else ""))
@@ -899,9 +900,15 @@ def verify(state, rt):
         if repair and repair["rewritten"]:          # verified once more; whatever remains is reported
             before = {"overclaims": len(v["overclaims"]),
                       "unsupported": sum(e["verdict"] == "unsupported" for e in v["entailment"])}
+            old_ent = v["entailment"]
             v = verify_text(synthesis, claims, required)
-            v["entailment"] = _entailment(synthesis, claims, rt)
+            # only rewritten sentences are judged again; the other verdicts still hold
+            replaced = {old for old, _ in repair["new"]}
+            v["entailment"] = ([e for e in old_ent if e.get("sentence") not in replaced]
+                               + _entailment("\n".join(new for _, new in repair["new"]), claims, rt))
             repair["before"] = before
+        if repair:
+            repair.pop("new", None)
     v["passed"] = v["passed"] and not any(e["verdict"] == "unsupported" for e in v["entailment"])
     if repair:
         v["repair"] = repair
