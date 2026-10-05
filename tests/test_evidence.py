@@ -1,7 +1,7 @@
 """Claim grading, method checks and report verification (bmira.evidence). Offline: no keys, no network."""
 from bmira.evidence import sentence_tier, verify_text
 
-from helpers import make_claim
+from helpers import StubLLM, make_claim
 
 
 # P5: negation-aware verbs; tags required.
@@ -30,7 +30,6 @@ def test_method_and_design_rules():
     assert grade_claim(strong, "human").grade == "moderate" and "indirect_system" in strong.grade_detail["caps"]
 
 
-# K1-K10: fixes from the pilot3 live run (butyrate -> Treg).
 def test_method_cues_cover_real_wording():
     from bmira.evidence import verify_methods
 
@@ -65,7 +64,6 @@ def test_entity_names_and_negated_scope_do_not_trigger_overclaim():
         assert verify_text(text, weak, [])["overclaims"], text             # real overclaims still caught
 
 
-# L1-L5: problems the other seven questions would hit (found by probing the code, not yet seen live).
 def test_trial_wording_counts_as_intervention_and_control():
     from bmira.evidence import verify_methods
 
@@ -82,7 +80,6 @@ def test_trial_wording_counts_as_intervention_and_control():
         assert c.perturbation_class == "pharmacological" and c.comparator_present, (span, c.method_checks)
 
 
-# M1-M5: exposure direction ("NAD+ decline", "TET2 loss") and randomized-trial grading.
 def test_randomized_evidence_can_grade_strong():
     from bmira.evidence import grade_claim
 
@@ -102,22 +99,16 @@ def test_randomized_evidence_can_grade_strong():
     assert grade_claim(animal, "any").grade == "moderate"                # animal pharmacology unchanged
 
 
-# P1-P6: fixes from the pilot5 live run (butyrate -> Treg).
 def test_entailment_judge_sees_the_study_system_and_design():
     """Pilot5: 9 of 12 entailment issues said the citation 'does not establish' an animal / human /
     cross-sectional study. The judge was shown only grade, relation and cell type."""
     from types import SimpleNamespace
     from bmira.graph import _entailment
     from bmira.schemas import EntailmentBatch
-    seen = []
-
-    class LLM:
-        def structured(self, task, schema, system, user, **kw):
-            seen.append(user)
-            return EntailmentBatch(judgements=[])
+    llm = StubLLM(EntailmentBatch(judgements=[]))
     c = make_claim("C1", "p", "increases", system="human_primary_cells", study_type="human_cohort")
-    _entailment("Butyrate increases Treg readouts in a human cohort [C1].", [c], SimpleNamespace(llm=LLM()))
-    assert "system: human_primary_cells" in seen[0] and "design: human_cohort" in seen[0]
+    _entailment("Butyrate increases Treg readouts in a human cohort [C1].", [c], SimpleNamespace(llm=llm))
+    assert "system: human_primary_cells" in llm.prompts[0] and "design: human_cohort" in llm.prompts[0]
 
 
 def test_associative_wording_and_emphasis_do_not_trigger_overclaim():
@@ -206,13 +197,8 @@ def test_verifier_false_alarms_from_pilot7():
     from types import SimpleNamespace
     from bmira.graph import _entailment
     from bmira.schemas import EntailmentBatch
-    seen = []
-
-    class LLM:
-        def structured(self, task, schema, system, user, **kw):
-            seen.append(user)
-            return EntailmentBatch(judgements=[])
+    llm = StubLLM(EntailmentBatch(judgements=[]))
     c = make_claim("C1", "p", "increases")
-    _entailment("Compare matched cultures with and without TGF-b1 [C1].", [c], SimpleNamespace(llm=LLM()))
-    assert not seen                                                  # a proposal is not sent to the judge
+    _entailment("Compare matched cultures with and without TGF-b1 [C1].", [c], SimpleNamespace(llm=llm))
+    assert not llm.prompts                                           # a proposal is not sent to the judge
 

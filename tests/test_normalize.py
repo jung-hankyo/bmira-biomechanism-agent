@@ -4,7 +4,7 @@ from bmira.config import Settings
 from bmira.normalize import EntityResolver, span_is_anchored
 from bmira.offline import offline_runtime
 
-from helpers import FixedLabelLLM, fake_ols, make_claim
+from helpers import FixedLabelLLM, fake_ols, make_claim, stub_ols
 
 
 # P2: alias merges survive re-normalization from raw surface text.
@@ -15,7 +15,6 @@ def test_alias_registry():
     assert r.resolve("lactic acid").id == r.resolve("Lactate").id
 
 
-# P5: negation-aware verbs; tags required.
 def test_claim_checks():
     from bmira.normalize import check_claim
     src = "Lactate increased GPR81 expression in tumor cells compared with controls."
@@ -51,7 +50,6 @@ def test_anchor_rejects_stitched_span():
     assert not span_is_anchored("Lactate increased histone lactylation and IFNG fell sharply.", src)
 
 
-# J1-J5: entity granularity, species-aware ontology, mention check, retrieval balance, throughput.
 def test_entity_variants_collapse_to_one_node():
     from bmira.normalize import entity_of, entity_parts, lookup_key, singular
     variants = ["Induction of colonic regulatory T cells", "regulatory T-cell frequency",
@@ -80,21 +78,14 @@ def test_mention_check_accepts_abbreviations_and_previous_sentence():
 
 
 def test_ontology_prefers_species_agnostic_and_rejects_other_species(monkeypatch):
-    import bmira.normalize as nz
-
     def docs(*items):
-        class R:
-            def json(self):
-                return {"response": {"docs": [{"obo_id": i, "label": lab, "synonym": ["IL-10"],
-                                               "ontology_name": "pr", "iri": ""} for i, lab in items]}}
-        return lambda *a, **k: R()
-    r = nz.EntityResolver(Settings(ontology_provider="ols"))
-    monkeypatch.setattr(nz.requests, "get", docs(("PR:1", "interleukin-10 (chicken)")))
+        stub_ols(monkeypatch, *[(i, lab, ["IL-10"], "pr") for i, lab in items])
+    r = EntityResolver(Settings(ontology_provider="ols"))
+    docs(("PR:1", "interleukin-10 (chicken)"))
     assert r._ols("IL-10") is None
-    monkeypatch.setattr(nz.requests, "get", docs(("PR:1", "interleukin-10 (chicken)"),
-                                                 ("PR:2", "interleukin-10 (mouse)"), ("PR:3", "interleukin-10")))
+    docs(("PR:1", "interleukin-10 (chicken)"), ("PR:2", "interleukin-10 (mouse)"), ("PR:3", "interleukin-10"))
     assert r._ols("IL-10").id == "PR:3"
-    monkeypatch.setattr(nz.requests, "get", docs(("PR:2", "interleukin-10 (mouse)"), ("PR:4", "interleukin-10 (human)")))
+    docs(("PR:2", "interleukin-10 (mouse)"), ("PR:4", "interleukin-10 (human)"))
     assert r._ols("IL-10").id == "PR:4"
 
 
@@ -113,7 +104,6 @@ def test_batched_resolution_and_disk_cache(tmp_path):
     assert llm2.calls["entities"] == 0 and r2.disk_hits == 2              # reused across runs
 
 
-# K1-K10: fixes from the pilot3 live run (butyrate -> Treg).
 def test_llm_label_is_looked_up_before_going_local():
     import bmira.normalize as nz
     cl = nz.Concept("CL:1", "regulatory T cell", "cell_type", "ols", 0.9)
@@ -125,14 +115,8 @@ def test_llm_label_is_looked_up_before_going_local():
 
 
 def test_ols_skips_allele_terms(monkeypatch):
-    import bmira.normalize as nz
-
-    class R:
-        def json(self):
-            return {"response": {"docs": [{"obo_id": "NCIT:C102493", "label": "HDAC9 wt Allele",
-                                           "synonym": ["HDAC"], "ontology_name": "ncit", "iri": ""}]}}
-    monkeypatch.setattr(nz.requests, "get", lambda *a, **k: R())
-    assert nz.EntityResolver(Settings(ontology_provider="ols"))._ols("HDAC") is None
+    stub_ols(monkeypatch, ("NCIT:C102493", "HDAC9 wt Allele", ["HDAC"], "ncit"))
+    assert EntityResolver(Settings(ontology_provider="ols"))._ols("HDAC") is None
 
 
 def test_clean_drops_abbreviation_parentheses():
@@ -165,7 +149,6 @@ def test_but_not_phrase_does_not_negate_the_claim():
     assert check_claim(c, src2) == ("", [])                              # 'lacks' is a null relation
 
 
-# L1-L5: problems the other seven questions would hit (found by probing the code, not yet seen live).
 def test_greek_letters_and_charges_keep_entities_apart():
     from bmira.normalize import local_concept, lookup_key
     assert lookup_key("IFN-γ") != lookup_key("IFN-α")             # both used to be 'ifn'
@@ -182,7 +165,6 @@ def test_genotype_notation_is_not_split_into_two_entities():
     assert entity_parts("GPR81/HCAR1")[0] == ["GPR81", "HCAR1"]               # real alternatives still split
 
 
-# M1-M5: exposure direction ("NAD+ decline", "TET2 loss") and randomized-trial grading.
 def test_loss_words_are_stripped_from_entities_but_not_from_phenotypes():
     from bmira.normalize import entity_change, entity_of
     assert entity_of("age-related NAD+ decline")[0] == "NAD+" and entity_change("age-related NAD+ decline") == "down"
@@ -192,7 +174,6 @@ def test_loss_words_are_stripped_from_entities_but_not_from_phenotypes():
     assert entity_change("Tet2-deficient macrophages") == "" and entity_change("Tet2") == ""     # a cell descriptor
 
 
-# N1-N11: fixes from the pilot4 live run (butyrate -> Treg).
 def test_salt_acid_and_given_forms_name_the_parent_chemical():
     import bmira.normalize as nz
     assert nz.entity_of("Sodium butyrate treatment")[0] == "Sodium butyrate"
@@ -208,15 +189,9 @@ def test_salt_acid_and_given_forms_name_the_parent_chemical():
 
 def test_ols_rejects_measurements_strains_and_bad_ids_and_prefers_labels(monkeypatch):
     """Real OLS answers from pilot4's names."""
-    import bmira.normalize as nz
-
     def ols(*docs):
-        class R:
-            def json(self):
-                return {"response": {"docs": [{"obo_id": i, "label": lab, "synonym": syn, "ontology_name": o,
-                                               "iri": ""} for i, lab, syn, o in docs]}}
-        monkeypatch.setattr(nz.requests, "get", lambda *a, **k: R())
-    r = nz.EntityResolver(Settings(ontology_provider="ols"))
+        stub_ols(monkeypatch, *docs)
+    r = EntityResolver(Settings(ontology_provider="ols"))
     ols(("CHEBI:17154", "nicotinamide", ["niacin"], "chebi"), ("CHEBI:15940", "nicotinic acid", ["Niacin"], "chebi"),
         ("NCIT:C689", "Niacin", [], "ncit"))
     assert r._ols("niacin").id == "NCIT:C689"                     # was nicotinamide
@@ -271,7 +246,6 @@ def test_local_cell_subtypes_inherit_the_cell_type_they_name():
     assert ln.n_studies == 2                                              # the subtype finding counts (R9)
 
 
-# P1-P6: fixes from the pilot5 live run (butyrate -> Treg).
 def test_quote_check_reads_the_first_use_of_the_verb():
     """Pilot5 dropped these as 'quote negates the claimed effect'."""
     from bmira.normalize import check_claim
@@ -294,7 +268,7 @@ def test_quote_check_reads_the_first_use_of_the_verb():
 def test_paper_defined_abbreviations_name_the_long_form():
     """Pilot5: 'SB' became LOCAL:sb in the paper that defines 'sodium butyrate (SB)'; live OLS
     returns no exact match for SB or NaB."""
-    from bmira.normalize import abbreviations, check_claim, expand_abbreviations, long_form
+    from bmira.normalize import abbreviations, check_claim, expand_abbreviations
     text = ("Mice were treated with sodium butyrate (SB) or vehicle. Cells received butyrate (Bu) or acetate (Ac). "
             "Short-chain fatty acids (SCFAs) were measured. Sodium butyrate (NaB) was also tested.")
     full = expand_abbreviations(abbreviations(text))

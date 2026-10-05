@@ -7,7 +7,7 @@ from bmira.graph import build_agent
 from bmira.normalize import EntityResolver
 from bmira.offline import offline_runtime
 
-from helpers import fake_ols, make_claim
+from helpers import StubLLM, fake_ols, make_claim, parsed_question
 
 
 # P0: the whole graph runs offline and the report passes its own verification.
@@ -48,7 +48,6 @@ def test_portfolio_escapes_lock_in(offline):
     assert not receptor.open                                  # searched out: no more budget
 
 
-# P5: negation-aware verbs; tags required.
 def test_run_applies_evidence_rules(offline):
     _, final = offline
     dropped = {c.pmid: c.drop_reason for c in final["dropped_claims"]}
@@ -90,7 +89,6 @@ def test_streamlit_app_offline():
     assert not at.exception and "Contradicted" in at.chat_message[3].markdown[0].value
 
 
-# J1-J5: entity granularity, species-aware ontology, mention check, retrieval balance, throughput.
 def test_screening_cutoff_and_targeted_retmax():
     from bmira.telemetry import execute
     rt, sc = offline_runtime()
@@ -104,18 +102,12 @@ def test_screening_cutoff_and_targeted_retmax():
     assert asked[:4] == [20] * 4 and set(asked[4:]) == {5}                # coverage 20, targeted 5
 
 
-# M1-M5: exposure direction ("NAD+ decline", "TET2 loss") and randomized-trial grading.
 def test_parse_strips_exposure_direction_and_keeps_it():
     from types import SimpleNamespace
     from bmira.graph import parse
-    from bmira.schemas import ParsedQuestion
-
-    class LLM:
-        def structured(self, task, schema, system, user, role="reasoning", ctx=None, n_items=1):
-            return ParsedQuestion(population_model="macrophages", exposure="age-related NAD+ decline",
-                                  comparator="young", outcome="inflammaging", mechanism_hypothesis="h",
-                                  expected_direction="up")
-    rt = SimpleNamespace(llm=LLM(), resolver=EntityResolver(Settings(ontology_provider="off")))
+    llm = StubLLM(parsed_question(population_model="macrophages", exposure="age-related NAD+ decline",
+                                  comparator="young", outcome="inflammaging", expected_direction="up"))
+    rt = SimpleNamespace(llm=llm, resolver=EntityResolver(Settings(ontology_provider="off")))
     out = parse({"question": "q"}, rt)
     assert out["parsed"].exposure == "NAD+" and out["parsed"].exposure_change == "down"
     assert out["exposure"] == rt.resolver.resolve("NAD+").id
@@ -123,36 +115,28 @@ def test_parse_strips_exposure_direction_and_keeps_it():
 
 def test_loss_of_function_claims_are_restated_for_the_bare_entity():
     from bmira.graph import normalize
-    from bmira.schemas import ParsedQuestion
     rt, _ = offline_runtime()
     c = make_claim("c1", "p", "")
     c.subject, c.object, c.relation, c.relation_raw = "Tet2 loss", "IL-6", "increased", "increased"
-    parsed = ParsedQuestion(population_model="m", exposure="Tet2", comparator="c", outcome="o",
-                            mechanism_hypothesis="h")
+    parsed = parsed_question(exposure="Tet2")
     out = normalize({"claims": [c], "parsed": parsed}, rt)["claims"]
     assert out[0].subject_label == "Tet2" and out[0].relation_norm == "decreases"      # loss increases = Tet2 decreases
     again = normalize({"claims": out, "parsed": parsed}, rt)["claims"]
     assert again[0].relation_norm == "decreases"                                       # flipped once, not every round
 
 
-# P1-P6: fixes from the pilot5 live run (butyrate -> Treg).
 def test_plan_matches_target_ids_leniently_and_says_when_it_drops_queries(capsys):
     """Pilot5 ran 3 queries for 3 targets (pilot4: 12) and nothing said why."""
     from bmira.graph import plan
-    from bmira.schemas import ParsedQuestion, QueryPlan, SearchQuery
+    from bmira.schemas import QueryPlan, SearchQuery
     rt, _ = offline_runtime()
     key = "A|increases|B"
     ln = pf.LinkEvidence(key=key, subject="A", relation="increases", object="B", subject_label="a", object_label="b")
 
-    class LLM:
-        def __init__(self, targets):
-            self.targets, self.prompt = targets, ""
-
-        def structured(self, task, schema, system, user, **k):
-            self.prompt = user
-            return QueryPlan(queries=[SearchQuery(query=f"q{i}", intent="gap_positive", target=t)
-                                      for i, t in enumerate(self.targets)])
-    parsed = ParsedQuestion(population_model="m", exposure="a", comparator="c", outcome="b", mechanism_hypothesis="h")
+    def LLM(targets):
+        return StubLLM(QueryPlan(queries=[SearchQuery(query=f"q{i}", intent="gap_positive", target=t)
+                                          for i, t in enumerate(targets)]))
+    parsed = parsed_question(outcome="b")
     state = {"parsed": parsed, "question": "q", "links": {key: ln}, "targets": [key]}
     rt.llm = LLM(["T1", "[T1]", "1", f"[{key}]", "T2", "nonsense"])
     out = plan(state, rt)["queries"]
@@ -167,9 +151,8 @@ def test_plan_matches_target_ids_leniently_and_says_when_it_drops_queries(capsys
 def test_long_form_replaces_an_abbreviation_only_when_it_resolves_to_nothing():
     """Pilot5: SB stayed LOCAL:sb. GPR109A and iTreg already resolve and must not move; a
     long form that is no better (the abbreviation's own definition garbled) is ignored."""
-    import bmira.normalize as nz
     from bmira.graph import _long_forms, normalize
-    from bmira.schemas import Paper, ParsedQuestion
+    from bmira.schemas import Paper
     rt, _ = offline_runtime()
     rt.resolver.settings.ontology_provider = "ols"
     rt.resolver._ols = fake_ols({"sodium butyrate": ("CHEBI:64103", "sodium butyrate"),
@@ -182,8 +165,7 @@ def test_long_form_replaces_an_abbreviation_only_when_it_resolves_to_nothing():
     gp = make_claim("c2", "p", "increases"); gp.subject, gp.object, gp.span = "GPR109A", "IL-10", "GPR109A rose."
     forms = _long_forms({"papers": [paper]})
     assert forms["p"]["sb"] == "sodium butyrate"
-    parsed = ParsedQuestion(population_model="m", exposure="butyrate", comparator="c", outcome="o",
-                            mechanism_hypothesis="h")
+    parsed = parsed_question(exposure="butyrate")
     out = normalize({"claims": [sb, gp], "parsed": parsed, "papers": [paper]}, rt)["claims"]
     assert out[0].subject_concept == "CHEBI:17968"                  # SB -> sodium butyrate -> butyrate (N1)
     assert out[1].subject_concept == "PR:000001629" and out[1].subject_label == "hydroxycarboxylic acid receptor 2"
@@ -194,10 +176,8 @@ def test_a_lost_subject_is_restated_to_its_normal_role():
     (about 8 of 19 loss-of-function claims in pilots 6-7 had the sign inverted)."""
     from bmira.evidence import verify_methods
     from bmira.graph import normalize
-    from bmira.schemas import ParsedQuestion
     rt, _ = offline_runtime()
-    parsed = ParsedQuestion(population_model="m", exposure="butyrate", comparator="c", outcome="o",
-                            mechanism_hypothesis="h")
+    parsed = parsed_question(exposure="butyrate")
     span = "Mice lacking GPR43 or GPR109A, receptors for SCFAs, showed exacerbated food allergy and fewer CD103(+) DCs."
     c = make_claim("c1", "p", "")
     c.subject, c.object, c.relation, c.relation_raw, c.span, c.subject_lost = "GPR109A", "CD103+ DCs", "reduced", "reduced", span, True
@@ -229,14 +209,10 @@ def test_exposure_members_share_the_exposure_node():
     """A question about 'SGLT2 inhibitors' meets papers about 'empagliflozin'."""
     from types import SimpleNamespace
     from bmira.graph import parse
-    from bmira.schemas import ParsedQuestion
-
-    class LLM:
-        def structured(self, task, schema, system, user, role="reasoning", ctx=None, n_items=1):
-            return ParsedQuestion(population_model="patients", exposure="SGLT2 inhibitors", comparator="placebo",
-                                  outcome="heart failure hospitalization", mechanism_hypothesis="h",
-                                  exposure_members=["empagliflozin", "dapagliflozin"])
-    rt = SimpleNamespace(llm=LLM(), resolver=EntityResolver(Settings(ontology_provider="off")))
+    llm = StubLLM(parsed_question(population_model="patients", exposure="SGLT2 inhibitors", comparator="placebo",
+                                  outcome="heart failure hospitalization",
+                                  exposure_members=["empagliflozin", "dapagliflozin"]))
+    rt = SimpleNamespace(llm=llm, resolver=EntityResolver(Settings(ontology_provider="off")))
     out = parse({"question": "q"}, rt)
     assert rt.resolver.resolve("empagliflozin").id == out["exposure"] == rt.resolver.resolve("dapagliflozin").id
 

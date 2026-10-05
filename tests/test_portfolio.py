@@ -5,10 +5,9 @@ from bmira.normalize import EntityResolver
 from bmira.offline import offline_runtime
 from bmira.schemas import Hypothesis
 
-from helpers import make_claim
+from helpers import make_claim, parsed_question
 
 
-# P3: the LLM's favourite pathway is wrong; the unseeded one must finish leading.
 def test_logic_checks():
     links = {}
     keys = [pf.link_key("A", "increases", "B"), pf.link_key("B", "increases", "C")]
@@ -81,7 +80,6 @@ def test_evidence_floor_and_null_asymmetry():
     assert ln.n_studies == 1 and "c5" in ln.uncounted                          # R1
 
 
-# K1-K10: fixes from the pilot3 live run (butyrate -> Treg).
 def test_findings_on_subtypes_support_the_parent_link():
     parent = pf.link_key("LOCAL:a", "increases", "CL:parent")
     claims = [make_claim("A", "p1", "increases", obj="CL:sub1"), make_claim("B", "p2", "increases", obj="CL:sub2"),
@@ -93,7 +91,6 @@ def test_findings_on_subtypes_support_the_parent_link():
     assert pf.build_links(claims, {}, {}, {}, Settings(), extra={parent})[parent].status != "supported"
 
 
-# L1-L5: problems the other seven questions would hit (found by probing the code, not yet seen live).
 def test_null_findings_contradict_required_and_modulating_steps():
     null = make_claim("n", "p", "no_effect")
     assert pf._contradicts("required_for", null) and pf._contradicts("sufficient_for", null)
@@ -105,7 +102,6 @@ def test_null_findings_contradict_required_and_modulating_steps():
     assert pf.build_links(nulls, {}, {}, {}, Settings(), extra={key})[key].status == "contradicted"
 
 
-# M1-M5: exposure direction ("NAD+ decline", "TET2 loss") and randomized-trial grading.
 def test_expected_sign_follows_the_exposure_change():
     assert pf.pathway_sign("up", "down") == "down" and pf.pathway_sign("down", "down") == "up"
     assert pf.pathway_sign("up", "up") == "up" and pf.pathway_sign("none", "down") == "none"
@@ -114,16 +110,13 @@ def test_expected_sign_follows_the_exposure_change():
     assert "sign_mismatch" in pf.logic_check(keys, {}, {}, "up")[1]
 
 
-# P1-P6: fixes from the pilot5 live run (butyrate -> Treg).
 def test_one_direct_route_per_outcome_and_a_slot_left_for_expansion():
     """Pilot5 (after N8) had 13 pathways: seven direct routes, four to Treg differing only in relation;
     and the last slots went to routes repeating seeds, so expansion never ran."""
     from bmira.graph import portfolio
-    from bmira.schemas import ParsedQuestion
     rt, _ = offline_runtime()
     rt.settings.max_hypotheses = 3
-    parsed = ParsedQuestion(population_model="m", exposure="a", comparator="c", outcome="b",
-                            mechanism_hypothesis="h", expected_direction="up")
+    parsed = parsed_question(outcome="b", expected_direction="up")
     claims = [make_claim("c1", "p1", "increases"), make_claim("c2", "p2", "increases"),
               make_claim("c3", "p3", "modulates", grade="weak"), make_claim("c4", "p4", "associated_with", grade="weak"),
               make_claim("m1", "p5", "increases", subj="LOCAL:a", obj="LOCAL:m1"),

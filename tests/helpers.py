@@ -1,5 +1,8 @@
-"""Shared test helpers: a claim factory and stand-ins for the model and for OLS."""
-from bmira.schemas import Claim
+"""Shared test helpers: a claim factory, stand-ins for the model and for OLS, and an offline
+session runner."""
+import json
+
+from bmira.schemas import Claim, ParsedQuestion
 
 
 def make_claim(i, pmid, rel, grade="moderate", subj="LOCAL:a", obj="LOCAL:b", ctx="cd8",
@@ -50,3 +53,48 @@ def fake_ols(table):
     import bmira.normalize as nz
     return lambda n: nz.Concept(*table[nz.lookup_key(n)], "chemical", "ols", 0.9) if nz.lookup_key(n) in table else None
 
+
+
+def run_session(tmp_path, questions="one\ntwo\n", *args, out="s.json"):
+    """`python -m bmira.experiments --offline --quiet` on a questions file written to tmp_path.
+    Returns the session file's contents (UTF-8; Windows defaults differ)."""
+    from bmira.experiments import main
+    qs = tmp_path / "q.txt"
+    qs.write_text(questions, encoding="utf-8")
+    path = main(["--offline", "--quiet", "--questions", str(qs), "--out", str(tmp_path / out), *args])
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def parsed_question(**fields):
+    """A ParsedQuestion with placeholder text in every required field not given."""
+    base = {"population_model": "m", "exposure": "a", "comparator": "c", "outcome": "o", "mechanism_hypothesis": "h"}
+    return ParsedQuestion(**{**base, **fields})
+
+
+def stub_ols(monkeypatch, *docs):
+    """Makes every OLS search answer `docs`: (obo_id, label, synonyms, ontology_name) tuples."""
+    import bmira.normalize as nz
+
+    class Response:
+        def json(self):
+            return {"response": {"docs": [{"obo_id": i, "label": lab, "synonym": list(syn), "ontology_name": o,
+                                           "iri": ""} for i, lab, syn, o in docs]}}
+    monkeypatch.setattr(nz.requests, "get", lambda *a, **k: Response())
+
+
+class StubLLM:
+    """Answers every structured() call with `reply` (a value, or a function of task, user, ctx and
+    n_items) and keeps the prompts it was sent."""
+
+    def __init__(self, reply):
+        self.reply, self.prompts = reply, []
+
+    @property
+    def prompt(self):
+        return self.prompts[-1] if self.prompts else ""
+
+    def structured(self, task, schema, system, user, **kw):
+        self.prompts.append(user)
+        if callable(self.reply):
+            return self.reply(task, user, kw.get("ctx"), kw.get("n_items", 1))
+        return self.reply

@@ -2,23 +2,16 @@
 from bmira.config import Settings
 
 
-# Telemetry: one session file, rewritten per run, with metrics and revision signals.
-def test_temperature_is_not_sent_by_default(monkeypatch):
+def test_temperature_is_not_sent_by_default(fake_chat_openai):
     """Some reasoning models reject any temperature but their default."""
-    import sys
-    import types
     from bmira.llm import LangChainLLM
-    seen = []
-    fake = types.ModuleType("langchain_openai")
-    fake.ChatOpenAI = lambda **kw: seen.append(kw) or object()
-    monkeypatch.setitem(sys.modules, "langchain_openai", fake)
+    seen = fake_chat_openai
     LangChainLLM(Settings(), api_key="k")._model("reasoning")
     assert "temperature" not in seen[-1]
     LangChainLLM(Settings(temperature=0.0), api_key="k")._model("cheap")
     assert seen[-1]["temperature"] == 0.0
 
 
-# H1-H3: failure-safe telemetry, fatal errors, preflight, budget, effort and cost.
 def test_error_classification():
     from bmira.llm import is_fatal
 
@@ -31,44 +24,26 @@ def test_error_classification():
     assert not is_fatal(E("Error code: 503 - server_is_overloaded"))
 
 
-def test_effort_retries_and_cost():
-    import sys
-    import types
+def test_effort_retries_and_cost(fake_chat_openai):
     from bmira.llm import LangChainLLM
     from bmira.telemetry import estimate_cost
-    seen = []
-    fake = types.ModuleType("langchain_openai")
-    fake.ChatOpenAI = lambda **kw: seen.append(kw) or object()
-    sys.modules["langchain_openai"] = fake
-    try:
-        llm = LangChainLLM(Settings(), api_key="k")
-        llm._for("screen", "cheap")
-        assert seen[-1]["reasoning_effort"] == "low" and seen[-1]["max_retries"] == 6
-        llm._for("extract", "reasoning")
-        assert seen[-1]["reasoning_effort"] == "medium" and llm.model_of["extract"] == Settings().models["openai"]["reasoning"]
-    finally:
-        del sys.modules["langchain_openai"]
+    seen = fake_chat_openai
+    llm = LangChainLLM(Settings(), api_key="k")
+    llm._for("screen", "cheap")
+    assert seen[-1]["reasoning_effort"] == "low" and seen[-1]["max_retries"] == 6
+    llm._for("extract", "reasoning")
+    assert seen[-1]["reasoning_effort"] == "medium" and llm.model_of["extract"] == Settings().models["openai"]["reasoning"]
     assert estimate_cost("gpt-6-sol", 1_000_000, 100_000, Settings().prices) == 3.0
     assert estimate_cost("unknown-model", 10, 10, Settings().prices) is None
 
 
-# J1-J5: entity granularity, species-aware ontology, mention check, retrieval balance, throughput.
-def test_classification_tasks_use_cheap_model():
-    import sys
-    import types
+def test_classification_tasks_use_cheap_model(fake_chat_openai):
     from bmira.llm import LangChainLLM
-    fake = types.ModuleType("langchain_openai")
-    fake.ChatOpenAI = lambda **kw: kw
-    sys.modules["langchain_openai"] = fake
-    try:
-        llm, m = LangChainLLM(Settings(), api_key="k"), Settings().models["openai"]
-        assert llm._for("pair", "reasoning")["model"] == m["cheap"]
-        assert llm._for("extract", "reasoning")["model"] == m["reasoning"]
-    finally:
-        del sys.modules["langchain_openai"]
+    llm, m = LangChainLLM(Settings(), api_key="k"), Settings().models["openai"]
+    assert llm._for("pair", "reasoning")["model"] == m["cheap"]
+    assert llm._for("extract", "reasoning")["model"] == m["reasoning"]
 
 
-# P1-P6: fixes from the pilot5 live run (butyrate -> Treg).
 def test_one_bad_screening_reply_does_not_discard_the_paid_batch():
     from types import SimpleNamespace
     from bmira.llm import LangChainLLM
