@@ -107,6 +107,21 @@ def test_no_new_q1_literals_in_the_package():
     assert len(lines) <= 37, f"{len(lines)} lines name butyrate or Treg (limit 37)"
 
 
+# Distinguishing terms of the development questions Q2-Q8 (experiments/questions.txt). Q1, the pilots' own question,
+# is capped by the test above. A prompt example that names one of these turns that question's probe into recall.
+DEV_TERMS = ("lactate", "metformin", "tet2", "nad+", "inflammaging", "atheroscler", "sglt2", "gliflozin",
+             "heart failure", "natriuretic", "probnp", "vitamin d", "autoimmune", "gpr81", "hcar1", "cd8")
+
+
+def test_prompts_do_not_quote_the_development_questions():
+    """EV-8: the pilot7 parse prompt taught 'NAD+ decline drives inflammaging', 'SGLT2 inhibitors' and 'heart
+    failure hospitalization' (Q5, Q6) and the extract prompt a lactate/Gpr81 blocking test (Q2, Q8), so the
+    probe's good reading of those questions was partly recall. Examples come from outside the question file."""
+    from bmira.llm import PROMPTS
+    text = " ".join(PROMPTS.values()).lower()
+    assert [term for term in DEV_TERMS if term in text] == []
+
+
 def test_ab_extract_reads_chosen_papers_and_lists_blocking_tests(tmp_path, monkeypatch):
     """EM-1/2 check on real text: the census found blocking tests in disguise in pilots 5-7 (e.g. 'Gpr109a
     was essential for butyrate-mediated induction of IL-18'); --pmids re-reads exactly those papers."""
