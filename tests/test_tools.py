@@ -105,3 +105,34 @@ def test_no_new_q1_literals_in_the_package():
     lines = [ln for f in sorted((ROOT / "bmira").glob("*.py"))
              for ln in f.read_text(encoding="utf-8").splitlines() if re.search(r"butyrate|treg", ln, re.I)]
     assert len(lines) <= 37, f"{len(lines)} lines name butyrate or Treg (limit 37)"
+
+
+def test_ab_extract_reads_chosen_papers_and_lists_blocking_tests(tmp_path, monkeypatch):
+    """EM-1/2 check on real text: the census found blocking tests in disguise in pilots 5-7 (e.g. 'Gpr109a
+    was essential for butyrate-mediated induction of IL-18'); --pmids re-reads exactly those papers."""
+    rt, _ = offline_runtime()
+
+    class Source:
+        def __init__(self, settings):
+            pass
+
+        def fetch(self, pmids):
+            return rt.source.fetch(pmids)
+
+        def fulltext(self, paper):
+            return rt.source.fulltext(paper)
+    monkeypatch.setattr("bmira.sources.PubMedSource", Source)
+    states = _states(tmp_path, ["S001", "S002"])
+    question, papers = ab_extract.load(states, rt.settings, tmp_path / "t.json", pmids=["S011", "S003"])
+    assert question == "q0" and [p.pmid for p in papers] == ["S003", "S011"]          # not the state's papers
+
+    block = make_claim("a", "p", "required_for", effect_exposure="butyrate", effect_result="abolished")
+    lost = make_claim("b", "p", "required_for", effect_exposure="butyrate", effect_result="abolished")
+    lost.drop_reason = "blocking-test treatment not named in quote"
+    arm = [{"rep": 0, "claims": [block, make_claim("c", "p", "increases")], "dropped": [lost],
+            "out": 1, "reason": 0, "cost": 0.0}]
+    s = ab_extract.summarize(arm)
+    assert s["blocking_tests_per_paper"] == 1.0 and s["blocking_tests_dropped_per_paper"] == 1.0
+    rows = ab_extract.blocking_tests(arm)
+    assert [(r["kept"], r["effect_result"]) for r in rows] == [(True, "abolished"), (False, "abolished")]
+    assert rows[1]["drop_reason"].startswith("blocking-test treatment")

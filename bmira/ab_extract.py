@@ -2,6 +2,8 @@
 
     python -m bmira.ab_extract                                  # papers read in BOTH pilot5 and pilot6
     python -m bmira.ab_extract --reps 2 --efforts medium low --limit 16 --out runs/ab_extract.json
+    python -m bmira.ab_extract --states runs/pilot7_q1.state.json --pmids 24412617 38319728 \
+        --efforts medium --out runs/ab_blocking.json            # chosen papers; question from the state
 
 Each paper is extracted `reps` times per effort from the same stored text. Two repeats of ONE effort
 measure run-to-run noise; the gap between the efforts is only meaningful beyond that noise. Reports claims,
@@ -28,13 +30,13 @@ ROOT = Path(__file__).resolve().parent.parent
 NULLS = {"no_effect", "not_associated"}
 
 
-def load(states, settings, cache):
-    """Papers read in ALL the saved runs, with their real text. State files blank `source_text` to stay
-    small, so the text is fetched again (PubMed abstract, Europe PMC full text when open) and cached, so
-    that both arms and every repeat read identical text."""
+def load(states, settings, cache, pmids=None):
+    """Papers read in ALL the saved runs (or the given `pmids`), with their real text. State files blank
+    `source_text` to stay small, so the text is fetched again (PubMed abstract, Europe PMC full text when
+    open) and cached, so that both arms and every repeat read identical text."""
     from bmira.sources import PubMedSource
     docs = [json.load(open(p, encoding="utf-8"))["state"] for p in states]
-    shared = sorted(set.intersection(*[{c["pmid"] for c in d["claims"]} for d in docs]))
+    shared = sorted(pmids) if pmids else sorted(set.intersection(*[{c["pmid"] for c in d["claims"]} for d in docs]))
     if cache.exists():
         papers = [Paper.model_validate(x) for x in json.loads(cache.read_text(encoding="utf-8"))]
         if [p.pmid for p in papers] == shared:
@@ -68,8 +70,19 @@ def summarize(arm):
             "rescue_orthogonal_comparator_per_paper": round(sum(c.rescue_arm + c.orthogonal_validation + c.comparator_present
                                                                 for c in kept) / n, 2),
             "method_checks_reset_per_paper": round(sum(bool(c.method_checks) for c in kept) / n, 2),
+            # EM-1/2: blocking tests the extractor recorded, and those the code checks then dropped
+            "blocking_tests_per_paper": round(sum(bool(c.effect_exposure) for c in kept) / n, 2),
+            "blocking_tests_dropped_per_paper": round(sum(bool(c.effect_exposure) for r in arm for c in r["dropped"]) / n, 2),
             "tokens_out": sum(r["out"] for r in arm), "tokens_reasoning": sum(r["reason"] for r in arm),
             "est_cost_usd": round(sum(r["cost"] for r in arm), 4)}
+
+
+def blocking_tests(arm) -> list[dict]:
+    """Every blocking-test claim, kept or dropped, for reading by hand against its quote."""
+    return [{"pmid": c.pmid, "rep": r.get("rep"), "kept": not c.drop_reason, "drop_reason": c.drop_reason,
+             "subject": c.subject, "relation": c.relation, "object": c.object, "effect_exposure": c.effect_exposure,
+             "effect_result": c.effect_result, "perturbation": c.perturbation_class, "span": c.span[:240]}
+            for r in arm for c in r["claims"] + r["dropped"] if c.effect_exposure]
 
 
 def pairs(r):
@@ -87,13 +100,16 @@ def main(argv=None):
     ap.add_argument("--efforts", nargs="+", default=["medium", "low"])
     ap.add_argument("--reps", type=int, default=2)
     ap.add_argument("--limit", type=int, default=16)
+    ap.add_argument("--pmids", nargs="+", help="read these papers instead of those shared by --states")
     ap.add_argument("--provider", default="openai", choices=["openai", "anthropic"])
     ap.add_argument("--out", type=Path, default=ROOT / "runs" / "ab_extract.json")
     a = ap.parse_args(argv)
 
     s = Settings(provider=a.provider)
-    question, papers = load(a.states, s, a.out.with_suffix(".texts.json"))
+    question, papers = load(a.states, s, a.out.with_suffix(".texts.json"), a.pmids)
     papers = [p for p in papers if len(p.source_text) > 500][:a.limit]
+    if a.pmids and (missing := sorted(set(a.pmids) - {p.pmid for p in papers})):
+        print(f"[WARN] no usable text for {missing}; they are skipped")
     if not papers:
         raise SystemExit("no paper text could be fetched (network? NCBI_EMAIL?); nothing to extract")
     print("text: " + ", ".join(f"{p.pmid}={p.text_access[:4]}/{len(p.source_text)}" for p in papers))
@@ -122,7 +138,8 @@ def main(argv=None):
                                 "cost": estimate_cost(model, d_in, d_out, s.prices) or 0.0})
             print(f"rep {rep} {e}: {sum(len(r['claims']) for r in arms[e] if r['rep'] == rep)} claims", flush=True)
 
-    result = {"model": model, "papers": [p.pmid for p in papers], "arms": {e: summarize(v) for e, v in arms.items()}}
+    result = {"model": model, "papers": [p.pmid for p in papers], "arms": {e: summarize(v) for e, v in arms.items()},
+              "blocking_tests": {e: blocking_tests(v) for e, v in arms.items()}}
     # overlap of the claimed subject/object pairs, paper by paper: within one effort = noise, across = effort
     within, across = {e: [] for e in a.efforts}, []
     for p in papers:
