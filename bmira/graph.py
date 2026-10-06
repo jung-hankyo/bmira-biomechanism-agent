@@ -849,11 +849,13 @@ def _direct_effect(state, links, rt) -> str:
     """EM-7 headline: every exposure -> outcome (or readout) step with evidence, whatever its verdict. Read from
     the links, not the routes: a direct step with only null or opposing findings never becomes a route."""
     exposure = _canon(state.get("exposure", ""), rt)
+    primary = _canon(state.get("outcome", ""), rt)
     named = {_canon(i, rt) for i in state.get("outcome_ids", [state.get("outcome", "")])}
     order = ["supported", "contradicted", "insufficient"]
+    # within a verdict: the question's own outcome before its readouts, then the better-studied step first
     direct = sorted((ln for ln in links.values() if ln.subject == exposure and ln.object in named
                      and (ln.support_ids or ln.contradicting_ids or ln.uncounted)),
-                    key=lambda ln: (order.index(ln.status), ln.key))
+                    key=lambda ln: (order.index(ln.status), ln.object != primary, -ln.n_studies, ln.key))
     if not direct:
         return "Direct effect: no study in the ledger tested the exposure against the outcome itself"
     return "Direct effect: " + "; ".join(f"{ln.subject_label} {ln.relation.replace('_', ' ')} {ln.object_label}: "

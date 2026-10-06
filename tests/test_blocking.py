@@ -321,3 +321,27 @@ def test_the_direct_effect_headline_reads_the_links_not_the_routes():
     assert _direct_effect(state, {k: ln}, rt) == ("Direct effect: Lactate no effect CD8 T cell effector function: "
                                                    "Insufficient evidence (1 of 2 required papers)")
     assert "no study in the ledger" in _direct_effect(state, {k: ln.model_copy(update={"support_ids": []})}, rt)
+
+
+def test_the_direct_effect_headline_leads_with_the_questions_own_outcome():
+    """Pilot7 replay under v3: the headline opened with 'butyrate decreases Interleukin-10: Supported (2 papers)'
+    and listed 'butyrate increases regulatory T cell: Supported (10 papers)' second, because steps were ordered
+    by key. The question asked about Tregs: its outcome comes first, then the better-studied step."""
+    from bmira.graph import _direct_effect
+    rt, _ = offline_runtime()
+    x = rt.resolver.resolve("butyrate").id
+    treg, il10 = rt.resolver.resolve("regulatory T cell").id, rt.resolver.resolve("interleukin-10").id
+
+    def link(rel, y, label, n):
+        k = pf.link_key(x, rel, y)
+        return k, pf.LinkEvidence(key=k, subject=x, relation=rel, object=y, subject_label="butyrate",
+                                  object_label=label, support_ids=["c"], n_studies=n, status="supported",
+                                  reason=f"{n} papers, best grade moderate")
+
+    links = dict([link("decreases", il10, "Interleukin-10", 2), link("increases", il10, "Interleukin-10", 3),
+                  link("increases", treg, "regulatory T cell", 10)])
+    state = {"exposure": x, "outcome": treg, "outcome_ids": [treg, il10]}
+    steps = _direct_effect(state, links, rt).removeprefix("Direct effect: ").split("; ")
+    assert [s.split(":")[0] for s in steps] == ["butyrate increases regulatory T cell",
+                                                "butyrate increases Interleukin-10",
+                                                "butyrate decreases Interleukin-10"]
