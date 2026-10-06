@@ -39,7 +39,7 @@ with st.sidebar:
         ncbi_key = st.text_input("NCBI API key (optional)", type="password",
                                  value=os.environ.get("NCBI_API_KEY", ""))
     max_rounds = st.slider("Max search rounds", 1, 8, 5)
-    if st.button("New conversation", use_container_width=True):
+    if st.button("New conversation", width="stretch"):
         ss.messages, ss.run, ss.rt, ss.metrics = [], None, None, None
         st.rerun()
     st.divider()
@@ -97,7 +97,7 @@ def render(m, i):
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
         if "rows" in m:
-            st.dataframe(pd.DataFrame(m["rows"]), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(m["rows"]), hide_index=True, width="stretch")
             with st.expander("Full report"):
                 st.markdown(m["report"])
             with st.expander("Run log"):
@@ -149,7 +149,7 @@ if ss.run is not None:
         st.download_button("Download run summary (.json)", json.dumps(
             ss.metrics, indent=1, ensure_ascii=False,
             default=lambda o: o.model_dump() if hasattr(o, "model_dump") else str(o)),
-            "bmira_run_summary.json", use_container_width=True,
+            "bmira_run_summary.json", width="stretch",
             help="Metrics and revision signals for this run; same format as the batch runner.")
         if ss.metrics["signals"]:
             st.caption("Revision signals: " + ", ".join(x["signal"] for x in ss.metrics["signals"]))

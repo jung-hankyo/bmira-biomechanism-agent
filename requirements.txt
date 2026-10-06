@@ -5,6 +5,6 @@ pydantic>=2
 requests
 numpy
 pandas
-streamlit>=1.40
+streamlit>=1.50
 sentence-transformers   # live runs; the offline kit uses a hashing encoder
 pytest

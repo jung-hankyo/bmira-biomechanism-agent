@@ -17,7 +17,7 @@ dependencies = ["langgraph>=1.0", "langchain-core>=1.0", "pydantic>=2", "request
 openai = ["langchain-openai"]
 anthropic = ["langchain-anthropic"]
 embeddings = ["sentence-transformers"]   # live runs; the offline kit uses a hashing encoder
-app = ["streamlit>=1.40", "pandas"]
+app = ["streamlit>=1.50", "pandas"]
 dev = ["pytest", "pytest-cov", "ruff"]
 
 [project.urls]
