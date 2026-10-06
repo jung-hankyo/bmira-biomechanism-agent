@@ -254,7 +254,7 @@ Code under test: `81efe0f` (v3 on `pilot7-fixes`). The files are in `runs/` (git
 | `bc02f77` | ab_extract writes every claim | test |
 | `a568575` | EV-8: examples in prompts come from outside the question file; a test lists the terms | test, fails on the old prompts |
 | `bcd5a29` | parse: no incidence, risk, level or rate in outcome names | **not yet: probe Q7** |
-| `70b65fb` | `experiments/heldout_questions.txt` (9 questions incl. Korean and out-of-scope) and `probe --file` | test |
+| `70b65fb` | `experiments/heldout_questions.txt` (8 questions incl. one out-of-scope; English only) and `probe --file` | test |
 | `181790f` | test: "Bu" resolves to butyrate | test |
 
 Both prompt changes (`a568575` swaps the examples, `bcd5a29` adds the clause) alter the parse of every question, so run these before pilot8 (about $0.5 in all):
@@ -262,4 +262,4 @@ Both prompt changes (`a568575` swaps the examples, `bcd5a29` adds the clause) al
 python -m bmira.probe --file experiments/heldout_questions.txt    # first honest read of generalization
 python -m bmira.probe                                             # Q1-Q8 again: did the parse hold without the quoted examples?
 ```
-Read: Q7's outcome and readouts without "incidence"; the Korean question answered in English; the back-pain question out of scope; class members for the GLP-1 question; loss-of-function direction for the TREM2 question; zero-hit queries. Fix the class of failure, then replace the question you fixed it for.
+Read: Q7's outcome and readouts without "incidence"; the back-pain question out of scope; class members for the GLP-1 question; loss-of-function direction for the TREM2 question; zero-hit queries. Fix the class of failure, then replace the question you fixed it for.

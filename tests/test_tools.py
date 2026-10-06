@@ -127,7 +127,7 @@ def test_the_heldout_questions_share_no_term_with_the_development_set(monkeypatc
     from bmira.experiments import load_questions
     path = ROOT / "experiments" / "heldout_questions.txt"
     held = load_questions(path)
-    assert len(held) >= 6 and any(not q.isascii() for q in held)               # includes a non-English question
+    assert len(held) >= 6 and all(q.isascii() for q in held)                   # English only: no other language is supported
     assert [t for t in DEV_TERMS + ("butyrate", "treg") if t in " ".join(held).lower()] == []
     seen = []
     monkeypatch.setattr(probe, "probe", lambda q, rt: seen.append(q))
