@@ -7,7 +7,8 @@
 
 Each paper is extracted `reps` times per effort from the same stored text. Two repeats of ONE effort
 measure run-to-run noise; the gap between the efforts is only meaningful beyond that noise. Reports claims,
-nulls, required_for, method fields kept, cost, and claim-set overlap (same subject/object pairs).
+nulls, required_for, method fields kept, cost, and claim-set overlap (same subject/object pairs). The output
+file also lists every claim (`claims`) and the blocking tests among them (`blocking_tests`).
 """
 import argparse
 import contextlib
@@ -77,12 +78,18 @@ def summarize(arm):
             "est_cost_usd": round(sum(r["cost"] for r in arm), 4)}
 
 
-def blocking_tests(arm) -> list[dict]:
-    """Every blocking-test claim, kept or dropped, for reading by hand against its quote."""
+def listing(arm, only_blocking=False) -> list[dict]:
+    """Claims of every read, kept or dropped, for reading by hand against their quotes. A blocking test the model
+    did not record shows here as an ordinary claim (or is absent) beside the sentence that carried it."""
     return [{"pmid": c.pmid, "rep": r.get("rep"), "kept": not c.drop_reason, "drop_reason": c.drop_reason,
              "subject": c.subject, "relation": c.relation, "object": c.object, "effect_exposure": c.effect_exposure,
              "effect_result": c.effect_result, "perturbation": c.perturbation_class, "span": c.span[:240]}
-            for r in arm for c in r["claims"] + r["dropped"] if c.effect_exposure]
+            for r in arm for c in r["claims"] + r["dropped"] if c.effect_exposure or not only_blocking]
+
+
+def blocking_tests(arm) -> list[dict]:
+    """Every blocking-test claim, kept or dropped."""
+    return listing(arm, only_blocking=True)
 
 
 def pairs(r):
@@ -139,7 +146,8 @@ def main(argv=None):
             print(f"rep {rep} {e}: {sum(len(r['claims']) for r in arms[e] if r['rep'] == rep)} claims", flush=True)
 
     result = {"model": model, "papers": [p.pmid for p in papers], "arms": {e: summarize(v) for e, v in arms.items()},
-              "blocking_tests": {e: blocking_tests(v) for e, v in arms.items()}}
+              "blocking_tests": {e: blocking_tests(v) for e, v in arms.items()},
+              "claims": {e: listing(v) for e, v in arms.items()}}
     # overlap of the claimed subject/object pairs, paper by paper: within one effort = noise, across = effort
     within, across = {e: [] for e in a.efforts}, []
     for p in papers:
@@ -151,8 +159,8 @@ def main(argv=None):
     mean = lambda v: round(st.mean(v), 3) if v else None
     result["pair_overlap"] = {"within_" + e: mean(v) for e, v in within.items()} | {"across_efforts": mean(across)}
     a.out.write_text(json.dumps(result, indent=1, ensure_ascii=False), encoding="utf-8")
-    print(json.dumps(result, indent=1, ensure_ascii=False))
-    print(f"\nwritten: {a.out}\nRead it: if across_efforts is about as high as the within_* values, the effort "
+    print(json.dumps({k: v for k, v in result.items() if k != "claims"}, indent=1, ensure_ascii=False))
+    print(f"\nwritten: {a.out} (every claim of every read is under 'claims')\nRead it: if across_efforts is about as high as the within_* values, the effort "
           f"changes little beyond noise; compare claims_per_paper, null_claims and knockout_claims between arms.")
 
 

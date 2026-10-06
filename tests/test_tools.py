@@ -136,3 +136,5 @@ def test_ab_extract_reads_chosen_papers_and_lists_blocking_tests(tmp_path, monke
     rows = ab_extract.blocking_tests(arm)
     assert [(r["kept"], r["effect_result"]) for r in rows] == [(True, "abolished"), (False, "abolished")]
     assert rows[1]["drop_reason"].startswith("blocking-test treatment")
+    every = ab_extract.listing(arm)            # a missed blocking test is read here, among the ordinary claims
+    assert [(r["pmid"], r["kept"]) for r in every] == [("p", True), ("p", True), ("p", False)]
