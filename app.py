@@ -43,8 +43,10 @@ with st.sidebar:
         ss.messages, ss.run, ss.rt, ss.metrics = [], None, None, None
         st.rerun()
     st.divider()
-    st.caption("Verdicts: **Supported** · **Contradicted** · **Insufficient evidence**. "
-               "Scores rank pathways; they are not probabilities.")
+    st.caption("Pathway verdicts: " + " · ".join(f"**{pf.ROUTE_LABEL[k]}**" for k in (
+               "demonstrated", "assembled", "refuted", "contradicted", "insufficient")) +
+               ". A direct exposure → outcome route reads **Supported**. Scores rank pathways; they are not "
+               "probabilities.")
 
 DEMO_QUESTION = load_scenario()["question"]
 
@@ -75,9 +77,14 @@ def investigate(question: str):
 
 
 def summary(state) -> str:
-    lead = state["hypotheses"][0] if state["hypotheses"] else None
-    head = (f"**Leading pathway:** {lead.name}: **{pf.ROUTE_LABEL[lead.status]}** "
-            f"(score {lead.score}). {lead.reason}." if lead else "**No pathway could be formed.**")
+    """The direct exposure -> outcome route answers 'does X affect Y'; the mechanism routes answer 'how'.
+    One verdict for both would let a Supported direct route read as an explained mechanism."""
+    hyps = state["hypotheses"]
+    head = "\n\n".join(
+        f"**{kind}:** {h.name}: **{pf.ROUTE_LABEL[h.status]}** (score {h.score}). {h.reason}."
+        for kind, h in (("Direct effect", next((h for h in hyps if pf.is_direct(h)), None)),
+                        ("Leading mechanism route", next((h for h in hyps if not pf.is_direct(h)), None))) if h
+    ) or "**No pathway could be formed.**"
     counts = pd.Series([pf.ROUTE_LABEL[h.status] for h in state["hypotheses"]]).value_counts()
     tally = ", ".join(f"{n} {label}" for label, n in counts.items())
     warn = "".join(f"\n- ⚠️ {w}" for w in state.get("warnings", []))

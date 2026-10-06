@@ -85,8 +85,9 @@ def test_streamlit_app_offline():
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest
     at = AppTest.from_file("../app.py", default_timeout=60).run()
+    assert any("Shown by a blocking experiment" in c.value for c in at.sidebar.caption)    # v3 verdicts in the legend
     at.chat_input[0].set_value("anything").run()            # offline: runs the demo scenario
-    assert not at.exception and "Leading pathway" in at.chat_message[1].markdown[0].value
+    assert not at.exception and "Leading mechanism route" in at.chat_message[1].markdown[0].value
     at.chat_input[0].set_value("Why is the chromatin route contradicted?").run()
     assert not at.exception and "Contradicted" in at.chat_message[3].markdown[0].value
 
