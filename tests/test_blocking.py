@@ -10,7 +10,7 @@ from bmira.graph import extract, normalize
 from bmira.offline import offline_runtime
 from bmira.schemas import ClaimList, ExtractedClaim, Paper
 
-from helpers import StubLLM, make_claim, parsed_question
+from helpers import StubLLM, fake_ols, make_claim, parsed_question
 
 TEXT = ("Butyrate expanded colonic regulatory T cells in wild-type mice compared with untreated controls. "
         "Slc5a8-null DCs did not induce IDO1 in response to butyrate. "
@@ -345,3 +345,21 @@ def test_the_direct_effect_headline_leads_with_the_questions_own_outcome():
     assert [s.split(":")[0] for s in steps] == ["butyrate increases regulatory T cell",
                                                 "butyrate increases Interleukin-10",
                                                 "butyrate decreases Interleukin-10"]
+
+
+def test_an_abbreviated_treatment_resolves_to_the_exposure():
+    """ab_blocking (7 papers, 14 reads): 3 of 17 recorded blocking tests named their treatment 'Bu', the paper's own
+    abbreviation of butyrate (PMID 38319728). It has to meet the question's exposure, or the test is filed under
+    some other treatment and never reaches the mediation index."""
+    rt, _ = offline_runtime()
+    rt.resolver.settings.ontology_provider = "ols"
+    rt.resolver._ols = fake_ols({"butyrate": ("CHEBI:17968", "butyrate"),
+                                 "gpr109a": ("PR:000001629", "hydroxycarboxylic acid receptor 2")})
+    rt.resolver.llm = None
+    text = "Cells were treated with butyrate (Bu). Inhibiting GPR109A suppressed the effects of Bu on IFN-g."
+    paper = Paper(pmid="p", title="t", abstract=text, source_text=text)
+    c = make_claim("c1", "p", "decreases", effect_exposure="Bu", effect_result="attenuated")
+    c.subject, c.object, c.perturbation_class = "GPR109A", "IFN-g", "pharmacological"
+    c.span = "Inhibiting GPR109A suppressed the effects of Bu on IFN-g."
+    out = normalize({"claims": [c], "parsed": parsed_question(exposure="butyrate"), "papers": [paper]}, rt)["claims"]
+    assert out[0].is_blocking_test and out[0].effect_exposure_concept == "CHEBI:17968"
