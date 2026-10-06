@@ -59,6 +59,7 @@ python -m bmira.experiments --offline                      # wiring check
 python -m bmira.experiments --replay runs/S_q1.state.json  # re-judge a saved run with the current code
 python -m bmira.experiments --judge jev                    # decision model in shadow mode (TYPESAFE_API_KEY)
 python -m bmira.probe ["question"]                         # parse + round-1 queries + hit counts (~$0.03)
+python -m bmira.probe --file experiments/heldout_questions.txt   # the generalization check: no prompt was written from these
 python -m bmira.shadow runs/S_q1.state.json --out runs/shadow.jsonl   # every judge question over a saved run
 python -m tools.token_anatomy runs/session_X.json          # where tokens and dollars went
 python -m tools.mediation_census runs/*_q*.state.json      # blocking tests in saved runs
@@ -105,9 +106,10 @@ tests/                  Offline tests, one file per stage    CLAUDE.md   Convent
 ## Limitations
 
 - **Live runs cover one question.** Pilots 3-7 all asked Q1 (butyrate and colonic Tregs). No mechanism route reached Supported there; most steps rest on one paper.
-- **v3 is not yet validated live.** The blocking-test model, route tiers, repair pass and judge are tested offline on invented papers only. Pilot8 will be the first live run with them, and also the first test of the pilot7 fixes.
+- **v3 has had free checks only.** A replay of pilot 7 under v3 (no overclaims left) and a 7-paper extraction A/B (17 blocking tests in 14 reads, the explicit ones captured) ran clean; see `docs/HANDOFF_v3_phase2.md` section 6. The route tiers need pilot8: old claims carry no blocking-test fields. Pilot8 is also the first live test of the pilot7 fixes.
+- **Q1-Q8 are development questions.** Prompts, rules and tests were written from them. `experiments/heldout_questions.txt` is the generalization check (`bmira.probe --file`); replace a question once you have tuned on it.
 - **Not yet built:** EM-6 (searching for blocking tests on purpose) and the gold labels (`eval/`). Without labels, no judge touchpoint can act.
-- Two reads of one paper change about 40% of the extracted claims, so single runs show only large effects. Grade weights and thresholds are reasoned defaults, not calibrated values.
+- Two reads of one paper change 40-50% of the extracted claims (pair overlap 0.6 and 0.47 in two A/Bs), so single runs show only large effects. Grade weights and thresholds are reasoned defaults, not calibrated values.
 - Only open-access full texts are read; abstract-only evidence is capped at moderate.
 
 ## Versioning

@@ -39,6 +39,9 @@ CI (`.github/workflows/tests.yml`) runs `ruff check .` and `pytest` on Python 3.
 - A fix found in a live run gets a test named after the behaviour it guarantees, with the pilot
   and the observed numbers in its docstring. Commit messages carry the fix code (`N9:`, `P3:`).
 - Fixture papers are invented; never cite them as literature.
+- Prompt examples come from outside `experiments/questions.txt` (a test lists the terms to keep out). Check
+  generalization with `python -m bmira.probe --file experiments/heldout_questions.txt`, and replace a held-out
+  question once you have tuned on it.
 - Do not add regex cue lists or lexicon entries to fix a semantic misreading: add the case to the gold
   set and route it to the judge. Do not loosen an evidence rule without gold-set evidence.
 - `# ponytail:` marks a known, deliberate limitation and what would lift it.

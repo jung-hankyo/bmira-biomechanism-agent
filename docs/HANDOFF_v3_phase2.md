@@ -208,3 +208,58 @@ Questions the run should answer:
 - **Known soft spots:**
   - The knockout cue list misses notations such as "Slc5a8-null". Such a blocking test is kept but graded lower, and JV-5/JV-15 are meant to replace the cues.
   - The judge's response format is taken from TypeSafe's documentation and not yet confirmed against a live reply. Record a real reply as a test fixture on first use.
+
+---
+
+## 6. Free checks before pilot8 (run by the owner 2026-10-06, read by a session on the owner's machine)
+
+Code under test: `81efe0f` (v3 on `pilot7-fixes`). The files are in `runs/` (git-ignored): `replay_p7_v3.json`, `ab_blocking.json` with `ab_blocking.texts.json`, `probe_q1-8.txt`.
+
+**Verdict: nothing blocks pilot8.** Two prompt changes (6.4) still need a live probe.
+
+### 6.1 Replay of pilot7 under v3 (`--replay`, $0.033, 119 s)
+- Completed with no crash. Verification PASS: 0 overclaims (pilot7 as run: 11; with the pilot7 fixes: 5), 0 uncited, 0 missing tags, 2 "partial" entailment flags. `repair` is empty: nothing was left to repair, so RP-2 has still not run on a real report.
+- 9 pathways: three direct routes Supported (regulatory T cell 10 papers, FOXP3 2, IL-10 3), six mechanism routes Insufficient evidence, none Shown or Assembled, mediation index empty. That is expected: pilot7's claims carry no blocking-test fields, so EM-3 and EM-4 have still not met real data.
+- 187 steps: 14 Supported, 3 Contradicted, 170 Insufficient evidence. Signals: no pathway supported (mechanism routes), exposure split (2 claims), supported off-portfolio (8 of 14).
+- Fixed from this read: the "Direct effect:" headline opened with the IL-10 decrease (2 papers) before the Treg increase (10 papers) because steps were ordered by key; the question's own outcome now comes first (`31a918e`).
+- Seen, not changed: a Supported opposite finding on a subtype of the outcome ("butyrate decreases FOXP3-positive regulatory T cell", 2 papers) shows only in `steps.supported_off_portfolio`, never in the headline (R9: a subtype never counts against its parent, by design). The off-portfolio signal also counts the reversed twin of a symmetric `binds` step, which shares its support with the step on the route.
+
+### 6.2 Blocking-test extraction A/B (`ab_extract --pmids`, 7 papers x 2 reads, medium effort, $0.59)
+- 17 blocking tests recorded in 14 reads (1.21 per paper), 0 dropped by the code checks, 6.29 claims per paper, claim-pair overlap between the two reads 0.47 (noisy: a test recorded in one read can be absent in the other).
+
+| Paper | Recorded | Reading |
+|---|---|---|
+| 34035164 | ACSS2 inhibitor attenuated butyrate-mediated iTreg and colitis | both reads; abstract only; on the Treg outcome |
+| 34691046 | GW9662 (PPAR-gamma) attenuated butyrate's Treg promotion; also an oxygen-consumption claim | one read of two; on the Treg outcome |
+| 38319728 | GPR109A (and HOPX) attenuated butyrate's IFN-gamma effect | both reads; treatment written "Bu" (resolves to butyrate, pinned by a test); not the Treg outcome |
+| 34006836 | STAT6, Hdac9, HDAC against IL-4's effect on Foxp3 or Treg | the treatment is IL-4, correctly not filed under butyrate |
+| 30915065 | Gpr109a, butyrate, Foxp3+ Treg, "abolished" | false positive from a review sentence that cites other work "(68, 90)". The pipeline skips reviews (TE-1) and the mediation index never counts them (R1); `ab_extract` does not screen |
+| 24412617 | none | "Gpr109a was essential for butyrate-mediated induction of IL-18": by the prompt's own rule, "mediated by X" with no reported experiment is `required_for`; the outcome is IL-18 |
+| 38810839 | none | "Pharmaceutical inhibition or genetic knockdown of ... CPT1A abolished the effect of butyrate": the endpoint (MDSC expansion) is only in the sentence before, and the quote check wants both entities in the quote; the outcome is MDSC |
+
+- Reading: explicit own-experiment blocking tests are captured (both Treg-outcome tests found, one of them in one read only). The two misses are not on Q1's outcome and are phrasings the prompt and the quote check exclude on purpose. They belong in the gold set (JV-15), not in a cue list. `ab_extract` now also writes every claim of every read (`claims`), so a missed sentence can be read next time (`bc02f77`).
+- **EM-6 (searching for blocking tests on purpose): not yet.** Incidental capture works, and nothing in these files says how many of the portfolio's proposed intermediates have a blocking test in the literature. Decide after pilot8: if `pathways.mediation` covers about half of the mechanism routes' intermediates, leave it; if routes sit at "Assembled" or "Insufficient evidence" only for want of a blocking test, build it, with hit counts checked on live PubMed from the owner's terminal first.
+
+### 6.3 Probe over Q1-Q8 (12,194 tokens in, 10,368 out)
+- All eight questions in scope and parsed in English, four queries each, none failed, none with zero hits (20 hits in 29 of 32 queries; the others 19 for Q3's negative-result query, 9 for Q1's, 4 for Q8's narrow mechanism query). Q4's planner wrote a MeSH heading that does not exist ("Tet Methylcytosine Dioxygenase 2"); the sanitizer dropped it and the queries still returned 20.
+- Q4 and Q5 (loss of the exposure) read as `exposure_change=down`; Q6 and Q7 (drug class, supplement) got class members, a human population and clinical readouts.
+- Q7's outcome was "Autoimmune disease incidence" and its readouts "rheumatoid arthritis incidence" and so on: all LOCAL ids, while Q6's outcome resolved on NCIT. Claims name the disease, so such an outcome would not meet them.
+- **Caveat found while reading it:** the pilot7 parse prompt and the v3 extract prompt quoted Q4, Q5, Q6 (and Q2, Q8) as examples. The clean reading of those questions was partly recall, so Q1-Q8 are a development set, not evidence of generalization.
+
+### 6.4 Commits from this read, and what is still unverified
+| Commit | Change | Verified |
+|---|---|---|
+| `31a918e` | EM-7 headline order | test, fails on the old order |
+| `aed99e3`, `34dfd45` | app: v3 legend, direct-effect and mechanism lines in the summary; `width="stretch"` (streamlit>=1.50) | offline AppTest |
+| `bc02f77` | ab_extract writes every claim | test |
+| `a568575` | EV-8: examples in prompts come from outside the question file; a test lists the terms | test, fails on the old prompts |
+| `bcd5a29` | parse: no incidence, risk, level or rate in outcome names | **not yet: probe Q7** |
+| `70b65fb` | `experiments/heldout_questions.txt` (9 questions incl. Korean and out-of-scope) and `probe --file` | test |
+| `181790f` | test: "Bu" resolves to butyrate | test |
+
+Both prompt changes (`a568575` swaps the examples, `bcd5a29` adds the clause) alter the parse of every question, so run these before pilot8 (about $0.5 in all):
+```bash
+python -m bmira.probe --file experiments/heldout_questions.txt    # first honest read of generalization
+python -m bmira.probe                                             # Q1-Q8 again: did the parse hold without the quoted examples?
+```
+Read: Q7's outcome and readouts without "incidence"; the Korean question answered in English; the back-pain question out of scope; class members for the GLP-1 question; loss-of-function direction for the TREM2 question; zero-hit queries. Fix the class of failure, then replace the question you fixed it for.
