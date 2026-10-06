@@ -1,0 +1,14 @@
+# Held-out questions for bmira.probe. None of them, nor their key terms, appears in a prompt, a rule or a test
+# (tests/test_tools.py checks the development terms). Run:
+#   python -m bmira.probe --file experiments/heldout_questions.txt        (about $0.03 per question)
+# Read what breaks (out of scope, unresolved exposure, zero hits, odd readouts) and fix the CLASS of failure, never
+# the question. A question you tuned on is a development question from then on: replace it with a new one.
+Does IL-33 signaling expand group 2 innate lymphoid cells in the lung, and through which mechanisms?
+Does microglial TREM2 deficiency impair amyloid plaque compaction, and through which mechanisms?
+Does hepatic de novo lipogenesis promote fibrosis in fatty liver disease, and through which mechanisms?
+Do GLP-1 receptor agonists reduce the risk of major cardiovascular events in type 2 diabetes, and through which mechanisms?
+Does habitual coffee consumption lower the risk of Parkinson's disease, and through which mechanisms?
+Does rapamycin extend lifespan in mice, and through which mechanisms?
+Does AMPK activation mediate the anti-inflammatory effect of salicylate in macrophages?
+운동은 근육의 미토콘드리아 생합성을 증가시키며, 그 기전은 무엇입니까?
+What is the best treatment for my back pain?

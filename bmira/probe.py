@@ -2,6 +2,7 @@
 
     python -m bmira.probe                       # all of experiments/questions.txt
     python -m bmira.probe "Does exercise ..."   # your own questions
+    python -m bmira.probe --file experiments/heldout_questions.txt   # questions no prompt or rule was written from
     python -m bmira.probe --offline             # wiring check
 
 Shows what the agent made of each question: scope, exposure/outcome (resolved), members, readouts,
@@ -10,6 +11,7 @@ unresolved exposure or an odd outcome here would cost a whole run later.
 """
 import argparse
 import os
+from pathlib import Path
 
 from bmira import Runtime, Settings
 from bmira.experiments import ROOT, load_questions
@@ -39,10 +41,11 @@ def probe(question: str, rt) -> None:
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("questions", nargs="*")
+    ap.add_argument("--file", type=Path, help="questions, one per line (default experiments/questions.txt)")
     ap.add_argument("--provider", default="openai", choices=["openai", "anthropic"])
     ap.add_argument("--offline", action="store_true")
     a = ap.parse_args(argv)
-    questions = a.questions or load_questions(ROOT / "experiments" / "questions.txt")
+    questions = a.questions or load_questions(a.file or ROOT / "experiments" / "questions.txt")
     if a.offline:
         from bmira.offline import offline_runtime
         rt, scenario = offline_runtime()

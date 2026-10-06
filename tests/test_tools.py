@@ -122,6 +122,20 @@ def test_prompts_do_not_quote_the_development_questions():
     assert [term for term in DEV_TERMS if term in text] == []
 
 
+def test_the_heldout_questions_share_no_term_with_the_development_set(monkeypatch, capsys):
+    """EV-8: the probe reads the held-out file with --file, and nothing in it is a development term (Q1-Q8)."""
+    from bmira.experiments import load_questions
+    path = ROOT / "experiments" / "heldout_questions.txt"
+    held = load_questions(path)
+    assert len(held) >= 6 and any(not q.isascii() for q in held)               # includes a non-English question
+    assert [t for t in DEV_TERMS + ("butyrate", "treg") if t in " ".join(held).lower()] == []
+    seen = []
+    monkeypatch.setattr(probe, "probe", lambda q, rt: seen.append(q))
+    monkeypatch.setattr(probe.Runtime, "live", staticmethod(lambda settings: offline_runtime()[0]))
+    probe.main(["--file", str(path)])
+    assert seen == held
+
+
 def test_ab_extract_reads_chosen_papers_and_lists_blocking_tests(tmp_path, monkeypatch):
     """EM-1/2 check on real text: the census found blocking tests in disguise in pilots 5-7 (e.g. 'Gpr109a
     was essential for butyrate-mediated induction of IL-18'); --pmids re-reads exactly those papers."""
